@@ -151,6 +151,129 @@ async fn test_update_record() {
 }
 
 #[tokio::test]
+async fn test_update_work_notes() {
+    let server = MockServer::start().await;
+
+    // ServiceNow returns the updated record after a PATCH.
+    // work_notes is write-only, so it comes back empty in the response.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/incident/abc123"))
+        .and(query_param("sysparm_display_value", "true"))
+        .and(query_param(
+            "sysparm_fields",
+            "sys_id,number,state,work_notes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "abc123",
+                "number": "INC0010001",
+                "state": "Pending",
+                "work_notes": ""
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .table("incident")
+        .fields(&["sys_id", "number", "state", "work_notes"])
+        .display_value(DisplayValue::Display)
+        .update(
+            "abc123",
+            json!({ "work_notes": "Test work note from Rust client" }),
+        )
+        .await
+        .expect("work_notes update failed");
+
+    // The record comes back successfully.
+    assert_eq!(record.get_str("number"), Some("INC0010001"));
+    assert_eq!(record.get_str("state"), Some("Pending"));
+    // work_notes is write-only — returns empty on GET/PATCH response.
+    assert_eq!(record.get_str("work_notes"), Some(""));
+}
+
+#[tokio::test]
+async fn test_update_passes_query_params() {
+    let server = MockServer::start().await;
+
+    // Verify that update() passes display_value, fields, and exclude_reference_link.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/incident/sys123"))
+        .and(query_param("sysparm_display_value", "all"))
+        .and(query_param("sysparm_fields", "number,state"))
+        .and(query_param("sysparm_exclude_reference_link", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "sys123",
+                "number": { "value": "INC0010002", "display_value": "INC0010002" },
+                "state": { "value": "1", "display_value": "New" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .table("incident")
+        .fields(&["number", "state"])
+        .display_value(DisplayValue::Both)
+        .exclude_reference_link(true)
+        .update("sys123", json!({ "state": "1" }))
+        .await
+        .expect("update with params failed");
+
+    assert_eq!(record.get_str("number"), Some("INC0010002"));
+    assert_eq!(record.get_display("state"), Some("New"));
+}
+
+#[tokio::test]
+async fn test_update_with_body_json() {
+    let server = MockServer::start().await;
+
+    // Verify the request body is sent correctly using body_json matcher.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/incident/sys456"))
+        .and(wiremock::matchers::body_json(json!({
+            "work_notes": "Note added via API",
+            "state": "2"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "sys456",
+                "number": "INC0010003",
+                "state": "2",
+                "work_notes": ""
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .table("incident")
+        .update(
+            "sys456",
+            json!({
+                "work_notes": "Note added via API",
+                "state": "2"
+            }),
+        )
+        .await
+        .expect("update with body failed");
+
+    assert_eq!(record.get_str("state"), Some("2"));
+    // work_notes is write-only, comes back empty.
+    assert_eq!(record.get_str("work_notes"), Some(""));
+}
+
+#[tokio::test]
 async fn test_delete_record() {
     let server = MockServer::start().await;
 
@@ -1394,6 +1517,296 @@ async fn test_journal_inline() {
     assert!(comments.contains("We are investigating this issue"));
 }
 
+// ── Record Update Helper tests ──────────────────────────────────
+
+#[tokio::test]
+async fn test_add_work_note() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/rm_scrum_task/stsk_sys_id"))
+        .and(wiremock::matchers::body_json(json!({
+            "work_notes": "Starting configuration work"
+        })))
+        .and(query_param("sysparm_display_value", "all"))
+        .and(query_param("sysparm_fields", "sys_id,number,state"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": { "value": "stsk_sys_id", "display_value": "stsk_sys_id" },
+                "number": { "value": "STSK0010001", "display_value": "STSK0010001" },
+                "state": { "value": "-6", "display_value": "Draft" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .add_work_note(
+            "rm_scrum_task",
+            "stsk_sys_id",
+            "Starting configuration work",
+        )
+        .await
+        .expect("add_work_note failed");
+
+    assert_eq!(record.get_display("number"), Some("STSK0010001"));
+    assert_eq!(record.get_display("state"), Some("Draft"));
+}
+
+#[tokio::test]
+async fn test_set_state() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/rm_scrum_task/stsk_sys_id"))
+        .and(wiremock::matchers::body_json(json!({
+            "state": "2",
+            "work_notes": "Starting work on this task"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": { "value": "stsk_sys_id", "display_value": "stsk_sys_id" },
+                "number": { "value": "STSK0010001", "display_value": "STSK0010001" },
+                "state": { "value": "2", "display_value": "Work in progress" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .set_state(
+            "rm_scrum_task",
+            "stsk_sys_id",
+            "2",
+            Some("Starting work on this task"),
+        )
+        .await
+        .expect("set_state failed");
+
+    assert_eq!(record.get_display("state"), Some("Work in progress"));
+    assert_eq!(record.get_raw("state"), Some("2"));
+}
+
+#[tokio::test]
+async fn test_set_state_without_note() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/incident/inc_sys_id"))
+        .and(wiremock::matchers::body_json(json!({ "state": "6" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": { "value": "inc_sys_id", "display_value": "inc_sys_id" },
+                "number": { "value": "INC0010001", "display_value": "INC0010001" },
+                "state": { "value": "6", "display_value": "Resolved" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .set_state("incident", "inc_sys_id", "6", None)
+        .await
+        .expect("set_state without note failed");
+
+    assert_eq!(record.get_display("state"), Some("Resolved"));
+}
+
+// ── Raw POST (Service Catalog, etc.) tests ──────────────────────
+
+#[tokio::test]
+async fn test_post_service_catalog_order() {
+    let server = MockServer::start().await;
+
+    // Mock the Service Catalog order_now endpoint.
+    Mock::given(method("POST"))
+        .and(path(
+            "/api/sn_sc/servicecatalog/items/cat_item_sys_id/order_now",
+        ))
+        .and(wiremock::matchers::body_json(json!({
+            "sysparm_quantity": "1",
+            "variables": {
+                "short_description": "Test request",
+                "additional_comments": "Created via API",
+                "requested_for": "user_sys_id"
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "request_number": "REQ0010001",
+                "request_id": "req_sys_id"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .post(
+            "/api/sn_sc/servicecatalog/items/cat_item_sys_id/order_now",
+            json!({
+                "sysparm_quantity": "1",
+                "variables": {
+                    "short_description": "Test request",
+                    "additional_comments": "Created via API",
+                    "requested_for": "user_sys_id"
+                }
+            }),
+        )
+        .await
+        .expect("catalog order failed");
+
+    assert_eq!(
+        result.get("request_number").and_then(|v| v.as_str()),
+        Some("REQ0010001")
+    );
+    assert_eq!(
+        result.get("request_id").and_then(|v| v.as_str()),
+        Some("req_sys_id")
+    );
+}
+
+#[tokio::test]
+async fn test_post_returns_api_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/sn_sc/servicecatalog/items/bad_id/order_now"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "message": "Mandatory Variables are required",
+                "detail": "missing required fields"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .post(
+            "/api/sn_sc/servicecatalog/items/bad_id/order_now",
+            json!({ "sysparm_quantity": "1", "variables": {} }),
+        )
+        .await;
+
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Mandatory Variables"),
+        "error should contain API message: {}",
+        err
+    );
+}
+
+// ── Requested Item (RITM) update tests ──────────────────────────
+
+#[tokio::test]
+async fn test_update_ritm_cmdb_ci() {
+    let server = MockServer::start().await;
+
+    // Mock PATCH to set cmdb_ci on a requested item.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/sc_req_item/ritm_sys_id"))
+        .and(wiremock::matchers::body_json(json!({
+            "cmdb_ci": "ci_sys_id",
+            "work_notes": "Set CI to test application"
+        })))
+        .and(query_param("sysparm_display_value", "all"))
+        .and(query_param(
+            "sysparm_fields",
+            "sys_id,number,cmdb_ci,assignment_group",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": { "value": "ritm_sys_id", "display_value": "ritm_sys_id" },
+                "number": { "value": "RITM0010001", "display_value": "RITM0010001" },
+                "cmdb_ci": { "value": "ci_sys_id", "display_value": "Test Application" },
+                "assignment_group": { "value": "grp_sys_id", "display_value": "Engineering Team" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let updated = client
+        .table("sc_req_item")
+        .fields(&["sys_id", "number", "cmdb_ci", "assignment_group"])
+        .display_value(DisplayValue::Both)
+        .update(
+            "ritm_sys_id",
+            json!({
+                "cmdb_ci": "ci_sys_id",
+                "work_notes": "Set CI to test application"
+            }),
+        )
+        .await
+        .expect("RITM cmdb_ci update failed");
+
+    assert_eq!(updated.get_display("cmdb_ci"), Some("Test Application"));
+    assert_eq!(updated.get_raw("cmdb_ci"), Some("ci_sys_id"));
+    assert_eq!(
+        updated.get_display("assignment_group"),
+        Some("Engineering Team")
+    );
+}
+
+#[tokio::test]
+async fn test_update_ritm_assignment_group() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/sc_req_item/ritm_sys_id"))
+        .and(wiremock::matchers::body_json(json!({
+            "assignment_group": "new_grp_sys_id",
+            "work_notes": "Reassigned"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": { "value": "ritm_sys_id", "display_value": "ritm_sys_id" },
+                "number": { "value": "RITM0010001", "display_value": "RITM0010001" },
+                "assignment_group": { "value": "new_grp_sys_id", "display_value": "IAM Engineering" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let updated = client
+        .table("sc_req_item")
+        .display_value(DisplayValue::Both)
+        .update(
+            "ritm_sys_id",
+            json!({
+                "assignment_group": "new_grp_sys_id",
+                "work_notes": "Reassigned"
+            }),
+        )
+        .await
+        .expect("RITM assignment_group update failed");
+
+    assert_eq!(
+        updated.get_display("assignment_group"),
+        Some("IAM Engineering")
+    );
+}
+
 // ── Browser URL tests ───────────────────────────────────────────
 
 #[tokio::test]
@@ -1445,4 +1858,375 @@ async fn test_browser_url_for_number() {
 
     // Unknown prefix returns None.
     assert!(client.browser_url_for_number("UNKNOWN001").is_none());
+}
+
+// ── Change Request + Change Task tests ──────────────────────────
+
+#[tokio::test]
+async fn test_create_change_request() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/now/table/change_request"))
+        .and(wiremock::matchers::body_json(json!({
+            "type": "normal",
+            "short_description": "Test change request",
+            "description": "Created via API",
+            "assignment_group": "grp_sys_id",
+            "cmdb_ci": "ci_sys_id",
+            "change_plan": "Deploy and test",
+            "backout_plan": "Revert if needed"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "result": {
+                "sys_id": "chg_sys_id",
+                "number": "CHG0010001",
+                "type": "normal",
+                "state": "-5",
+                "short_description": "Test change request",
+                "assignment_group": "grp_sys_id",
+                "cmdb_ci": "ci_sys_id"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let chg = client
+        .table("change_request")
+        .create(json!({
+            "type": "normal",
+            "short_description": "Test change request",
+            "description": "Created via API",
+            "assignment_group": "grp_sys_id",
+            "cmdb_ci": "ci_sys_id",
+            "change_plan": "Deploy and test",
+            "backout_plan": "Revert if needed"
+        }))
+        .await
+        .expect("create change_request failed");
+
+    assert_eq!(chg.get_str("number"), Some("CHG0010001"));
+    assert_eq!(chg.get_str("type"), Some("normal"));
+    assert_eq!(chg.get_str("sys_id"), Some("chg_sys_id"));
+}
+
+#[tokio::test]
+async fn test_create_change_task_with_parent() {
+    let server = MockServer::start().await;
+
+    // Create a change task linked via "parent" field (not "change_request"
+    // which is read-only/computed on many instances).
+    Mock::given(method("POST"))
+        .and(path("/api/now/table/change_task"))
+        .and(wiremock::matchers::body_json(json!({
+            "parent": "chg_sys_id",
+            "short_description": "Pre-Implementation Testing",
+            "change_task_type": "planning",
+            "assignment_group": "grp_sys_id"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "result": {
+                "sys_id": "ctask_sys_id",
+                "number": "CTASK0010001",
+                "short_description": "Pre-Implementation Testing",
+                "change_task_type": "planning",
+                "parent": "chg_sys_id",
+                "state": "-5"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let task = client
+        .table("change_task")
+        .create(json!({
+            "parent": "chg_sys_id",
+            "short_description": "Pre-Implementation Testing",
+            "change_task_type": "planning",
+            "assignment_group": "grp_sys_id"
+        }))
+        .await
+        .expect("create change_task failed");
+
+    assert_eq!(task.get_str("number"), Some("CTASK0010001"));
+    assert_eq!(task.get_str("parent"), Some("chg_sys_id"));
+    assert_eq!(task.get_str("change_task_type"), Some("planning"));
+}
+
+#[tokio::test]
+async fn test_query_change_tasks_via_parent() {
+    let server = MockServer::start().await;
+
+    // Change tasks should be queried via "parent" field to include
+    // both auto-generated and manually created tasks.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_task"))
+        .and(query_param("sysparm_query", "parent=chg_sys_id"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "ctask1",
+                    "number": "CTASK0010001",
+                    "short_description": "Pre-Implementation Testing",
+                    "change_task_type": "planning",
+                    "parent": "chg_sys_id",
+                    "change_request": "chg_sys_id"
+                },
+                {
+                    "sys_id": "ctask2",
+                    "number": "CTASK0010002",
+                    "short_description": "Implementation",
+                    "change_task_type": "implementation",
+                    "parent": "chg_sys_id",
+                    "change_request": "chg_sys_id"
+                },
+                {
+                    "sys_id": "ctask3",
+                    "number": "CTASK0010003",
+                    "short_description": "Custom validation step",
+                    "change_task_type": "planning",
+                    "parent": "chg_sys_id",
+                    "change_request": ""
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let tasks = client
+        .table("change_task")
+        .equals("parent", "chg_sys_id")
+        .execute()
+        .await
+        .expect("query change_tasks failed");
+
+    // Should return all 3: 2 auto-generated + 1 manually created.
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks.records[0].get_str("number"), Some("CTASK0010001"));
+    assert_eq!(tasks.records[2].get_str("number"), Some("CTASK0010003"));
+    // The manually created one has empty change_request but valid parent.
+    assert_eq!(tasks.records[2].get_str("change_request"), Some(""));
+    assert_eq!(tasks.records[2].get_str("parent"), Some("chg_sys_id"));
+}
+
+// ── Approval tests ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_approve_change_request() {
+    let server = MockServer::start().await;
+
+    // Step 1: Mock the lookup for the pending approval record.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "sysapproval=chg_sys_id^approver=user_sys_id^state=requested",
+        ))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "appr_sys_id",
+                    "sysapproval": "chg_sys_id",
+                    "approver": "user_sys_id",
+                    "state": "requested",
+                    "source_table": "change_request",
+                    "comments": ""
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step 2: Mock the PATCH to approve.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/sysapproval_approver/appr_sys_id"))
+        .and(query_param("sysparm_display_value", "true"))
+        .and(wiremock::matchers::body_json(json!({
+            "state": "approved",
+            "comments": "Looks good"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "appr_sys_id",
+                "sysapproval": "CHG0010001",
+                "approver": "Test User",
+                "state": "Approved",
+                "source_table": "change_request",
+                "comments": "Looks good",
+                "sys_updated_on": "2026-03-27 17:30:00"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let approval = client
+        .approve("change_request", "chg_sys_id", "user_sys_id")
+        .comment("Looks good")
+        .execute()
+        .await
+        .expect("approve failed");
+
+    assert_eq!(approval.get_str("state"), Some("Approved"));
+    assert_eq!(approval.get_str("comments"), Some("Looks good"));
+    assert_eq!(approval.get_str("source_table"), Some("change_request"));
+}
+
+#[tokio::test]
+async fn test_reject_change_request() {
+    let server = MockServer::start().await;
+
+    // Lookup mock.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "sysapproval=chg_sys_id^approver=user_sys_id^state=requested",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "appr_sys_id",
+                    "sysapproval": "chg_sys_id",
+                    "approver": "user_sys_id",
+                    "state": "requested",
+                    "source_table": "change_request",
+                    "comments": ""
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PATCH mock for rejection.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/sysapproval_approver/appr_sys_id"))
+        .and(wiremock::matchers::body_json(json!({
+            "state": "rejected",
+            "comments": "Missing test plan"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "appr_sys_id",
+                "sysapproval": "CHG0010001",
+                "approver": "Test User",
+                "state": "Rejected",
+                "source_table": "change_request",
+                "comments": "Missing test plan",
+                "sys_updated_on": "2026-03-27 17:30:00"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let rejection = client
+        .reject("change_request", "chg_sys_id", "user_sys_id")
+        .comment("Missing test plan")
+        .execute()
+        .await
+        .expect("reject failed");
+
+    assert_eq!(rejection.get_str("state"), Some("Rejected"));
+    assert_eq!(rejection.get_str("comments"), Some("Missing test plan"));
+}
+
+#[tokio::test]
+async fn test_approve_no_pending_approval() {
+    let server = MockServer::start().await;
+
+    // Return empty result — no pending approval found.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .approve("change_request", "chg_sys_id", "wrong_user_sys_id")
+        .execute()
+        .await;
+
+    assert!(
+        result.is_err(),
+        "should fail when no pending approval found"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("no pending approval found"),
+        "error should explain the failure: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn test_approve_without_comment() {
+    let server = MockServer::start().await;
+
+    // Lookup mock.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [{
+                "sys_id": "appr_sys_id",
+                "sysapproval": "chg_sys_id",
+                "approver": "user_sys_id",
+                "state": "requested",
+                "source_table": "change_request",
+                "comments": ""
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    // PATCH mock — body should only contain state, no comments key.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/sysapproval_approver/appr_sys_id"))
+        .and(wiremock::matchers::body_json(
+            json!({ "state": "approved" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "appr_sys_id",
+                "sysapproval": "CHG0010001",
+                "approver": "Test User",
+                "state": "Approved",
+                "source_table": "change_request",
+                "comments": "",
+                "sys_updated_on": "2026-03-27 17:30:00"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let approval = client
+        .approve("change_request", "chg_sys_id", "user_sys_id")
+        .execute()
+        .await
+        .expect("approve without comment failed");
+
+    assert_eq!(approval.get_str("state"), Some("Approved"));
 }

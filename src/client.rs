@@ -5,6 +5,7 @@ use std::time::Duration;
 use url::Url;
 
 use crate::api::aggregate::AggregateApi;
+use crate::api::approval::{ApprovalAction, ApprovalBuilder};
 use crate::auth::basic::BasicAuth;
 use crate::auth::token::TokenAuth;
 use crate::auth::Authenticator;
@@ -125,6 +126,18 @@ impl ServiceNowClient {
     /// Get the base instance URL.
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Send a raw POST request to any ServiceNow API endpoint.
+    ///
+    /// Use this for APIs not covered by the Table API (e.g. Service Catalog,
+    /// Import Sets, Scripted REST APIs). The `path` should start with `/`
+    /// (e.g. `"/api/sn_sc/servicecatalog/items/{id}/order_now"`).
+    ///
+    /// Returns the raw JSON `result` field from the response.
+    pub async fn post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value> {
+        let response = self.transport.post(path, body).await?;
+        Ok(response.result)
     }
 
     // ── Record Number Resolution ────────────────────────────────────
@@ -314,6 +327,152 @@ impl ServiceNowClient {
             .equals("sys_id", sys_id)
             .fields(fields)
             .display_value(DisplayValue::Display)
+    }
+
+    // ── Record Update Helpers ──────────────────────────────────────
+
+    /// Append a work note to a record.
+    ///
+    /// This is a convenience wrapper around [`TableApi::update`] that sends
+    /// only the `work_notes` field. The note is appended as a new journal
+    /// entry — it does not overwrite existing notes.
+    ///
+    /// Returns the updated record with the fields specified in `return_fields`.
+    /// If `return_fields` is empty, ServiceNow returns all fields.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let record = client
+    ///     .add_work_note("incident", "sys_id_here", "Escalated to network team")
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn add_work_note(&self, table: &str, sys_id: &str, note: &str) -> Result<Record> {
+        self.table(table)
+            .fields(&["sys_id", "number", "state"])
+            .display_value(DisplayValue::Both)
+            .update(sys_id, serde_json::json!({ "work_notes": note }))
+            .await
+    }
+
+    /// Change the state of a record.
+    ///
+    /// The `state` value should be the raw numeric string as ServiceNow
+    /// expects it (e.g. `"1"` for New, `"2"` for Work In Progress).
+    /// Use [`DisplayValue::Both`] on a query to discover the mapping
+    /// between raw values and display labels for a given table.
+    ///
+    /// Optionally appends a work note explaining the state change.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// // Change to "Work In Progress" with a note.
+    /// let record = client
+    ///     .set_state("rm_scrum_task", "sys_id_here", "2", Some("Starting work"))
+    ///     .await?;
+    ///
+    /// println!("New state: {}", record.get_display("state").unwrap_or("?"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_state(
+        &self,
+        table: &str,
+        sys_id: &str,
+        state: &str,
+        work_note: Option<&str>,
+    ) -> Result<Record> {
+        let mut body = serde_json::json!({ "state": state });
+        if let Some(note) = work_note {
+            body["work_notes"] = serde_json::json!(note);
+        }
+        self.table(table)
+            .fields(&["sys_id", "number", "state"])
+            .display_value(DisplayValue::Both)
+            .update(sys_id, body)
+            .await
+    }
+
+    // ── Approval Operations ─────────────────────────────────────────
+
+    /// Approve a pending approval for a record.
+    ///
+    /// Finds the approval in `sysapproval_approver` matching the record
+    /// and approver, then sets its state to "approved".
+    ///
+    /// # Arguments
+    ///
+    /// * `source_table` — The table the approval is for (e.g. `"change_request"`)
+    /// * `record_sys_id` — The sys_id of the record being approved
+    /// * `approver_sys_id` — The sys_id of the approving user (must match the
+    ///   assigned approver)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let approval = client
+    ///     .approve("change_request", "chg_sys_id", "user_sys_id")
+    ///     .comment("Approved via API")
+    ///     .execute()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn approve(
+        &self,
+        source_table: &str,
+        record_sys_id: &str,
+        approver_sys_id: &str,
+    ) -> ApprovalBuilder {
+        ApprovalBuilder::new(
+            Arc::clone(&self.transport),
+            source_table,
+            record_sys_id,
+            approver_sys_id,
+            ApprovalAction::Approve,
+        )
+    }
+
+    /// Reject a pending approval for a record.
+    ///
+    /// Finds the approval in `sysapproval_approver` matching the record
+    /// and approver, then sets its state to "rejected".
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let rejection = client
+    ///     .reject("change_request", "chg_sys_id", "user_sys_id")
+    ///     .comment("Missing test plan")
+    ///     .execute()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn reject(
+        &self,
+        source_table: &str,
+        record_sys_id: &str,
+        approver_sys_id: &str,
+    ) -> ApprovalBuilder {
+        ApprovalBuilder::new(
+            Arc::clone(&self.transport),
+            source_table,
+            record_sys_id,
+            approver_sys_id,
+            ApprovalAction::Reject,
+        )
     }
 
     // ── Browser URL Construction ────────────────────────────────────
