@@ -918,3 +918,229 @@ async fn test_token_auth() {
 
     assert_eq!(result.len(), 1);
 }
+
+// ── Journal field tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_journal_fields_return_empty_on_get() {
+    let server = MockServer::start().await;
+
+    // ServiceNow returns empty strings for journal fields on GET.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "inc123",
+                    "number": "INC001",
+                    "work_notes": "",
+                    "comments": "",
+                    "comments_and_work_notes": ""
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("incident")
+        .fields(&["number", "work_notes", "comments", "comments_and_work_notes"])
+        .execute()
+        .await
+        .expect("journal field query failed");
+
+    let record = &result.records[0];
+    // Journal fields return empty on GET — this is expected ServiceNow behavior.
+    assert_eq!(record.get_str("work_notes"), Some(""));
+    assert_eq!(record.get_str("comments"), Some(""));
+    assert_eq!(record.get_str("comments_and_work_notes"), Some(""));
+}
+
+#[tokio::test]
+async fn test_journal_entries_via_sys_journal_field() {
+    let server = MockServer::start().await;
+
+    // Main incident query.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "inc123",
+                    "number": "INC001",
+                    "short_description": "Test incident"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // sys_journal_field entries for the incident (work_notes relationship).
+    // The relationship is defined on change_request but we can also query directly.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sys_journal_field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "jf001",
+                    "element_id": "inc123",
+                    "name": "incident",
+                    "element": "work_notes",
+                    "value": "Internal note: checking network switch",
+                    "sys_created_on": "2026-03-25 10:00:00",
+                    "sys_created_by": "admin"
+                },
+                {
+                    "sys_id": "jf002",
+                    "element_id": "inc123",
+                    "name": "incident",
+                    "element": "comments",
+                    "value": "Hi, we are looking into this issue.",
+                    "sys_created_on": "2026-03-25 10:05:00",
+                    "sys_created_by": "admin"
+                },
+                {
+                    "sys_id": "jf003",
+                    "element_id": "inc123",
+                    "name": "incident",
+                    "element": "work_notes",
+                    "value": "Escalated to network team",
+                    "sys_created_on": "2026-03-25 11:00:00",
+                    "sys_created_by": "admin"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    // Query the journal entries directly.
+    let journal = client
+        .table("sys_journal_field")
+        .equals("element_id", "inc123")
+        .fields(&["element", "value", "sys_created_on", "sys_created_by"])
+        .execute()
+        .await
+        .expect("journal query failed");
+
+    assert_eq!(journal.len(), 3);
+
+    // Separate work_notes (private) from comments (public).
+    let work_notes: Vec<_> = journal
+        .iter()
+        .filter(|r| r.get_str("element") == Some("work_notes"))
+        .collect();
+    let comments: Vec<_> = journal
+        .iter()
+        .filter(|r| r.get_str("element") == Some("comments"))
+        .collect();
+
+    assert_eq!(work_notes.len(), 2, "expected 2 work notes (private)");
+    assert_eq!(comments.len(), 1, "expected 1 comment (public)");
+
+    assert_eq!(
+        work_notes[0].get_str("value"),
+        Some("Internal note: checking network switch")
+    );
+    assert_eq!(
+        comments[0].get_str("value"),
+        Some("Hi, we are looking into this issue.")
+    );
+}
+
+#[tokio::test]
+async fn test_change_request_work_notes_relationship() {
+    let server = MockServer::start().await;
+
+    // Main change_request query.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_request"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "chg123",
+                    "number": "CHG001",
+                    "short_description": "Deploy update"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // work_notes relationship: sys_journal_field with filter name=change_request.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sys_journal_field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "jf001",
+                    "element_id": "chg123",
+                    "name": "change_request",
+                    "element": "work_notes",
+                    "value": "CAB approved, proceeding with implementation",
+                    "sys_created_on": "2026-03-20 14:00:00",
+                    "sys_created_by": "change_mgr"
+                },
+                {
+                    "sys_id": "jf002",
+                    "element_id": "chg123",
+                    "name": "change_request",
+                    "element": "comments",
+                    "value": "Change scheduled for this weekend",
+                    "sys_created_on": "2026-03-20 14:05:00",
+                    "sys_created_by": "change_mgr"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    // Use include_related to fetch work_notes via the relationship.
+    let result = client
+        .table("change_request")
+        .include_related(&["work_notes"])
+        .execute()
+        .await
+        .expect("change_request with work_notes failed");
+
+    assert_eq!(result.len(), 1);
+    let chg = &result.records[0];
+    let notes = chg.related("work_notes");
+    assert_eq!(notes.len(), 2, "expected 2 journal entries via relationship");
+    assert_eq!(
+        notes[0].get_str("element"),
+        Some("work_notes")
+    );
+}
+
+#[tokio::test]
+async fn test_schema_journal_field_metadata() {
+    // Verify schema correctly identifies journal fields.
+    let registry =
+        servicenow_rs::schema::SchemaRegistry::from_release("xanadu").unwrap();
+
+    // work_notes should be journal, write-only.
+    let wn = registry.field("incident", "work_notes").unwrap();
+    assert!(wn.is_journal());
+    assert!(wn.write_only);
+
+    // comments should be journal, write-only.
+    let c = registry.field("incident", "comments").unwrap();
+    assert!(c.is_journal());
+    assert!(c.write_only);
+
+    // approval_history should be journal, read-only.
+    let ah = registry.field("incident", "approval_history").unwrap();
+    assert!(ah.is_journal());
+    assert!(ah.read_only);
+
+    // short_description should NOT be journal.
+    let sd = registry.field("incident", "short_description").unwrap();
+    assert!(!sd.is_journal());
+    assert!(!sd.read_only);
+}

@@ -63,12 +63,17 @@ pub struct FieldDef {
     /// Maximum length for string fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_length: Option<u32>,
-    /// Whether this field is read-only.
+    /// Whether this field is read-only (system-generated, cannot be set via API).
     #[serde(default)]
     pub read_only: bool,
-    /// Whether this field is mandatory.
+    /// Whether this field is mandatory (required for create/update).
     #[serde(default)]
     pub mandatory: bool,
+    /// Whether this field is write-only (journal fields: can be set but always return empty).
+    /// Journal fields like work_notes and comments accept input on POST/PATCH
+    /// but return empty strings on GET. Read actual entries via sys_journal_field.
+    #[serde(default)]
+    pub write_only: bool,
     /// Choice values for choice fields: value -> display label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choices: Option<HashMap<String, String>>,
@@ -78,6 +83,26 @@ pub struct FieldDef {
     /// Human-readable label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+impl FieldDef {
+    /// Whether this field can be set via API (not read-only and not a read-only journal).
+    pub fn is_writable(&self) -> bool {
+        !self.read_only
+    }
+
+    /// Whether this field is a journal type (work_notes, comments, etc.).
+    pub fn is_journal(&self) -> bool {
+        matches!(
+            self.field_type,
+            FieldType::Journal | FieldType::JournalInput
+        )
+    }
+
+    /// Whether this is a reference field pointing to another table.
+    pub fn is_reference(&self) -> bool {
+        self.field_type == FieldType::Reference && self.reference_table.is_some()
+    }
 }
 
 /// Definition of a relationship between tables.

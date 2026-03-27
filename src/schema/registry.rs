@@ -137,6 +137,59 @@ impl SchemaRegistry {
             .and_then(|t| t.extends.as_deref())
     }
 
+    /// Get all writable fields for a table (including inherited).
+    pub fn writable_fields(&self, table: &str) -> Vec<(&str, &FieldDef)> {
+        self.all_fields(table)
+            .into_iter()
+            .filter(|(_, f)| f.is_writable())
+            .collect()
+    }
+
+    /// Get all read-only fields for a table (including inherited).
+    pub fn read_only_fields(&self, table: &str) -> Vec<(&str, &FieldDef)> {
+        self.all_fields(table)
+            .into_iter()
+            .filter(|(_, f)| f.read_only)
+            .collect()
+    }
+
+    /// Get all mandatory fields for a table (including inherited).
+    pub fn mandatory_fields(&self, table: &str) -> Vec<(&str, &FieldDef)> {
+        self.all_fields(table)
+            .into_iter()
+            .filter(|(_, f)| f.mandatory)
+            .collect()
+    }
+
+    /// Get all journal fields for a table (including inherited).
+    pub fn journal_fields(&self, table: &str) -> Vec<(&str, &FieldDef)> {
+        self.all_fields(table)
+            .into_iter()
+            .filter(|(_, f)| f.is_journal())
+            .collect()
+    }
+
+    /// Get all fields for a table, walking the inheritance chain.
+    pub fn all_fields(&self, table: &str) -> Vec<(&str, &FieldDef)> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut current = Some(table);
+
+        while let Some(tbl_name) = current {
+            if let Some(tbl) = self.schema.tables.get(tbl_name) {
+                for (k, v) in &tbl.fields {
+                    if seen.insert(k.as_str()) {
+                        result.push((k.as_str(), v));
+                    }
+                }
+                current = tbl.extends.as_deref();
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
     /// Get the full schema definition.
     pub fn schema(&self) -> &SchemaDefinition {
         &self.schema
@@ -201,5 +254,87 @@ mod tests {
         assert!(registry.has_field("change_request", "u_custom_field"));
         // Original fields still present.
         assert!(registry.has_field("change_request", "number"));
+    }
+
+    #[test]
+    fn test_field_attributes() {
+        let registry = SchemaRegistry::from_release("xanadu").unwrap();
+
+        // sys_id is read-only (inherited from task).
+        let sys_id = registry.field("incident", "sys_id").unwrap();
+        assert!(sys_id.read_only);
+        assert!(!sys_id.is_journal());
+        assert!(sys_id.is_writable() == false);
+
+        // work_notes is journal + write-only (inherited from task).
+        let wn = registry.field("incident", "work_notes").unwrap();
+        assert!(wn.is_journal());
+        assert!(wn.write_only);
+
+        // comments is journal + write-only.
+        let c = registry.field("incident", "comments").unwrap();
+        assert!(c.is_journal());
+        assert!(c.write_only);
+
+        // assigned_to is a reference field.
+        let at = registry.field("incident", "assigned_to").unwrap();
+        assert!(at.is_reference());
+        assert_eq!(at.reference_table.as_deref(), Some("sys_user"));
+        assert!(at.is_writable());
+    }
+
+    #[test]
+    fn test_writable_fields() {
+        let registry = SchemaRegistry::from_release("xanadu").unwrap();
+        let writable = registry.writable_fields("incident");
+        let read_only = registry.read_only_fields("incident");
+
+        // Should have writable fields.
+        assert!(!writable.is_empty());
+        // Should have read-only fields (sys_id, number, etc.).
+        assert!(!read_only.is_empty());
+
+        // Writable should NOT contain sys_id.
+        assert!(!writable.iter().any(|(name, _)| *name == "sys_id"));
+        // Read-only SHOULD contain sys_id.
+        assert!(read_only.iter().any(|(name, _)| *name == "sys_id"));
+    }
+
+    #[test]
+    fn test_journal_fields() {
+        let registry = SchemaRegistry::from_release("xanadu").unwrap();
+        let journals = registry.journal_fields("incident");
+
+        let names: Vec<&str> = journals.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"work_notes"));
+        assert!(names.contains(&"comments"));
+        assert!(names.contains(&"comments_and_work_notes"));
+        assert!(names.contains(&"approval_history"));
+    }
+
+    #[test]
+    fn test_all_fields_with_inheritance() {
+        let registry = SchemaRegistry::from_release("xanadu").unwrap();
+        let all = registry.all_fields("incident");
+
+        let names: Vec<&str> = all.iter().map(|(n, _)| *n).collect();
+        // Should include incident-specific fields.
+        assert!(names.contains(&"caller_id"));
+        assert!(names.contains(&"incident_state"));
+        // Should include inherited task fields.
+        assert!(names.contains(&"number"));
+        assert!(names.contains(&"work_notes"));
+        assert!(names.contains(&"assigned_to"));
+    }
+
+    #[test]
+    fn test_yokohama_and_washington_releases() {
+        let yoko = SchemaRegistry::from_release("yokohama").unwrap();
+        assert_eq!(yoko.release(), "yokohama");
+        assert!(yoko.has_table("incident"));
+
+        let wash = SchemaRegistry::from_release("washington").unwrap();
+        assert_eq!(wash.release(), "washington");
+        assert!(wash.has_table("change_request"));
     }
 }

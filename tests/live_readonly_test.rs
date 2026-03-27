@@ -342,3 +342,171 @@ async fn test_live_count_method() {
     println!("Incident count via .count(): {}", count);
     assert!(count > 0);
 }
+
+// ── Journal / Notes tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn test_live_journal_fields_empty_on_get() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // work_notes and comments return empty on GET — this is by design.
+    let result = client
+        .table("incident")
+        .fields(&["number", "work_notes", "comments"])
+        .limit(3)
+        .execute()
+        .await
+        .expect("journal field query failed");
+
+    for record in &result {
+        let num = record.get_str("number").unwrap_or("?");
+        let wn = record.get_str("work_notes").unwrap_or("(null)");
+        let cm = record.get_str("comments").unwrap_or("(null)");
+        println!("{}: work_notes='{}', comments='{}'", num, wn, cm);
+        // Journal fields always return empty on GET.
+        assert!(
+            wn.is_empty() || wn == "(null)",
+            "work_notes should be empty on GET, got: '{}'",
+            wn
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_live_journal_entries_via_sys_journal_field() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // Get an incident that likely has journal entries.
+    let incidents = client
+        .table("incident")
+        .fields(&["sys_id", "number"])
+        .limit(1)
+        .execute()
+        .await
+        .expect("incident query failed");
+
+    let inc = &incidents.records[0];
+    let sys_id = &inc.sys_id;
+    let number = inc.get_str("number").unwrap_or("?");
+    println!("Checking journal entries for {}", number);
+
+    // Query sys_journal_field for this incident's entries.
+    let journal = client
+        .table("sys_journal_field")
+        .equals("element_id", sys_id)
+        .fields(&["element", "value", "sys_created_on", "sys_created_by"])
+        .order_by("sys_created_on", Order::Desc)
+        .limit(10)
+        .execute()
+        .await
+        .expect("journal query failed");
+
+    println!("Found {} journal entries for {}", journal.len(), number);
+
+    for entry in &journal {
+        let element = entry.get_str("element").unwrap_or("?");
+        let by = entry.get_str("sys_created_by").unwrap_or("?");
+        let at = entry.get_str("sys_created_on").unwrap_or("?");
+        let val = entry
+            .get_str("value")
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect::<String>();
+        let note_type = match element {
+            "work_notes" => "PRIVATE",
+            "comments" => "PUBLIC",
+            _ => "OTHER",
+        };
+        println!("  [{}] {} by {} at {}: {}", note_type, element, by, at, val);
+    }
+}
+
+#[tokio::test]
+async fn test_live_change_request_notes_relationship() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // Fetch a change request with its work_notes relationship.
+    let result = client
+        .table("change_request")
+        .fields(&["number", "short_description"])
+        .include_related(&["work_notes"])
+        .limit(1)
+        .execute()
+        .await
+        .expect("change_request notes query failed");
+
+    let chg = &result.records[0];
+    let num = chg.get_str("number").unwrap_or("?");
+    let notes = chg.related("work_notes");
+
+    println!("{}: {} journal entries via relationship", num, notes.len());
+    for entry in notes.iter().take(5) {
+        let element = entry.get_str("element").unwrap_or("?");
+        let by = entry.get_str("sys_created_by").unwrap_or("?");
+        println!("  {} by {}", element, by);
+    }
+}
+
+#[tokio::test]
+async fn test_live_separate_public_private_notes() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // Get an incident sys_id.
+    let inc = client
+        .table("incident")
+        .fields(&["sys_id", "number"])
+        .limit(1)
+        .execute()
+        .await
+        .expect("query failed");
+
+    let sys_id = &inc.records[0].sys_id;
+
+    // Query private notes (work_notes).
+    let private = client
+        .table("sys_journal_field")
+        .equals("element_id", sys_id)
+        .equals("element", "work_notes")
+        .fields(&["element", "value", "sys_created_by"])
+        .limit(5)
+        .execute()
+        .await
+        .expect("private notes query failed");
+
+    // Query public notes (comments).
+    let public = client
+        .table("sys_journal_field")
+        .equals("element_id", sys_id)
+        .equals("element", "comments")
+        .fields(&["element", "value", "sys_created_by"])
+        .limit(5)
+        .execute()
+        .await
+        .expect("public notes query failed");
+
+    println!(
+        "Private (work_notes): {}, Public (comments): {}",
+        private.len(),
+        public.len()
+    );
+
+    for r in &private {
+        assert_eq!(r.get_str("element"), Some("work_notes"));
+    }
+    for r in &public {
+        assert_eq!(r.get_str("element"), Some("comments"));
+    }
+}
