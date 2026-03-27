@@ -58,6 +58,6 @@ pub mod prelude {
     pub use crate::client::{ClientBuilder, ServiceNowClient};
     pub use crate::error::{Error, Result};
     pub use crate::model::{DisplayValue, FieldValue, QueryResult, Record};
-    pub use crate::query::{FetchStrategy, Operator, Order};
+    pub use crate::query::{FetchStrategy, Operator, Order, Paginator};
     pub use crate::schema::SchemaRegistry;
 }

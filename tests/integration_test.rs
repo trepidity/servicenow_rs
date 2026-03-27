@@ -488,3 +488,297 @@ async fn test_no_schema_related_records() {
     assert_eq!(result.len(), 1);
     assert!(result.has_errors());
 }
+
+#[tokio::test]
+async fn test_dot_walk_fields() {
+    let server = MockServer::start().await;
+
+    // ServiceNow returns dot-walked fields as flat keys.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param(
+            "sysparm_fields",
+            "number,assigned_to.name,assigned_to.email",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "abc123",
+                    "number": "INC0010001",
+                    "assigned_to.name": "John Smith",
+                    "assigned_to.email": "john@example.com"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("incident")
+        .fields(&["number"])
+        .dot_walk(&["assigned_to.name", "assigned_to.email"])
+        .execute()
+        .await
+        .expect("dot-walk query failed");
+
+    assert_eq!(result.len(), 1);
+    let record = &result.records[0];
+    assert_eq!(record.get_str("assigned_to.name"), Some("John Smith"));
+    assert_eq!(record.get_str("assigned_to.email"), Some("john@example.com"));
+    assert!(record.has_field("assigned_to.name"));
+
+    // Test dot_walked_fields helper.
+    let dw = record.dot_walked_fields("assigned_to");
+    assert_eq!(dw.len(), 2);
+}
+
+#[tokio::test]
+async fn test_dot_walk_with_display_value_all() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_display_value", "all"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": { "display_value": "abc123", "value": "abc123" },
+                    "number": { "display_value": "INC0010001", "value": "INC0010001" },
+                    "caller_id.name": { "display_value": "Jane Doe", "value": "Jane Doe" },
+                    "caller_id.manager.name": { "display_value": "Bob Boss", "value": "Bob Boss" }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("incident")
+        .fields(&["number"])
+        .dot_walk(&["caller_id.name", "caller_id.manager.name"])
+        .display_value(DisplayValue::Both)
+        .execute()
+        .await
+        .expect("dot-walk + display_value query failed");
+
+    let record = &result.records[0];
+    assert_eq!(record.get_display("caller_id.name"), Some("Jane Doe"));
+    assert_eq!(
+        record.get_display("caller_id.manager.name"),
+        Some("Bob Boss")
+    );
+}
+
+#[tokio::test]
+async fn test_pagination() {
+    let server = MockServer::start().await;
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    // Page 1.
+    let counter_clone = counter.clone();
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "0"))
+        .and(query_param("sysparm_limit", "2"))
+        .respond_with(move |_: &wiremock::Request| {
+            counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "5")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a1", "number": "INC001" },
+                        { "sys_id": "a2", "number": "INC002" }
+                    ]
+                }))
+        })
+        .mount(&server)
+        .await;
+
+    // Page 2.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "2"))
+        .and(query_param("sysparm_limit", "2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "5")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a3", "number": "INC003" },
+                        { "sys_id": "a4", "number": "INC004" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    // Page 3 (last, partial).
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "4"))
+        .and(query_param("sysparm_limit", "2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "5")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a5", "number": "INC005" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    // Test paginate() manual iteration.
+    let mut paginator = client
+        .table("incident")
+        .limit(2)
+        .paginate();
+
+    let page1 = paginator.next_page().await.unwrap().unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(paginator.total_count(), Some(5));
+
+    let page2 = paginator.next_page().await.unwrap().unwrap();
+    assert_eq!(page2.len(), 2);
+
+    let page3 = paginator.next_page().await.unwrap().unwrap();
+    assert_eq!(page3.len(), 1);
+
+    let page4 = paginator.next_page().await.unwrap();
+    assert!(page4.is_none()); // no more pages
+    assert!(paginator.is_done());
+}
+
+#[tokio::test]
+async fn test_execute_all() {
+    let server = MockServer::start().await;
+
+    // Page 1.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "0"))
+        .and(query_param("sysparm_limit", "3"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "5")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a1", "number": "INC001" },
+                        { "sys_id": "a2", "number": "INC002" },
+                        { "sys_id": "a3", "number": "INC003" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    // Page 2 (last).
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "3"))
+        .and(query_param("sysparm_limit", "3"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "5")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a4", "number": "INC004" },
+                        { "sys_id": "a5", "number": "INC005" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("incident")
+        .limit(3)
+        .execute_all(None)
+        .await
+        .expect("execute_all failed");
+
+    assert_eq!(result.len(), 5);
+    assert_eq!(result.total_count, Some(5));
+}
+
+#[tokio::test]
+async fn test_execute_all_with_max() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "0"))
+        .and(query_param("sysparm_limit", "5"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "1000")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a1", "number": "INC001" },
+                        { "sys_id": "a2", "number": "INC002" },
+                        { "sys_id": "a3", "number": "INC003" },
+                        { "sys_id": "a4", "number": "INC004" },
+                        { "sys_id": "a5", "number": "INC005" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    // Limit to 3 records even though there are 1000 total.
+    let result = client
+        .table("incident")
+        .limit(5)
+        .execute_all(Some(3))
+        .await
+        .expect("execute_all with max failed");
+
+    assert_eq!(result.len(), 3);
+}
+
+#[tokio::test]
+async fn test_reference_field_parsing() {
+    let server = MockServer::start().await;
+
+    // Reference fields with display_value=false return {link, value} objects.
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "abc123",
+                    "number": "INC001",
+                    "assigned_to": {
+                        "link": "https://instance.service-now.com/api/now/table/sys_user/user123",
+                        "value": "user123"
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("incident")
+        .execute()
+        .await
+        .expect("query failed");
+
+    let record = &result.records[0];
+    let assigned = record.get("assigned_to").expect("missing assigned_to");
+    assert_eq!(assigned.raw_str(), Some("user123"));
+    assert!(assigned.link.is_some());
+}

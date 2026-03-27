@@ -12,6 +12,7 @@ use crate::transport::http::HttpTransport;
 
 use super::batch;
 use super::filter::{Condition, Filter, Joiner, Operator, Order, encode_query};
+use super::paginator::Paginator;
 use super::strategy::FetchStrategy;
 
 /// Builder for constructing and executing ServiceNow Table API queries.
@@ -48,6 +49,7 @@ pub struct TableApi {
     table: String,
     conditions: Vec<Condition>,
     fields: Option<Vec<String>>,
+    dot_walk_fields: Vec<String>,
     related: Vec<String>,
     display_value: DisplayValue,
     limit: Option<u32>,
@@ -71,6 +73,7 @@ impl TableApi {
             table: table.into(),
             conditions: Vec::new(),
             fields: None,
+            dot_walk_fields: Vec::new(),
             related: Vec::new(),
             display_value: DisplayValue::default(),
             limit: None,
@@ -178,6 +181,36 @@ impl TableApi {
         self
     }
 
+    /// Add dot-walked fields to fetch from referenced records inline.
+    ///
+    /// ServiceNow returns these as flat keys (e.g., `"assigned_to.name"`).
+    /// This is more efficient than `include_related` for fetching a few
+    /// fields from referenced records — it uses a single HTTP request.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let results = client.table("incident")
+    ///     .dot_walk(&["assigned_to.name", "assigned_to.email", "caller_id.manager.name"])
+    ///     .limit(10)
+    ///     .execute()
+    ///     .await?;
+    ///
+    /// for record in &results {
+    ///     println!("Assigned: {}", record.get_str("assigned_to.name").unwrap_or("?"));
+    ///     println!("Manager: {}", record.get_str("caller_id.manager.name").unwrap_or("?"));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dot_walk(mut self, fields: &[&str]) -> Self {
+        self.dot_walk_fields
+            .extend(fields.iter().map(|s| s.to_string()));
+        self
+    }
+
     /// Set the display value mode.
     pub fn display_value(mut self, mode: DisplayValue) -> Self {
         self.display_value = mode;
@@ -258,6 +291,72 @@ impl TableApi {
     pub async fn first(self) -> Result<Option<Record>> {
         let result = self.limit(1).execute().await?;
         Ok(result.records.into_iter().next())
+    }
+
+    /// Auto-paginate through all matching records and collect them.
+    ///
+    /// Fetches pages sequentially using `sysparm_limit` and `sysparm_offset`
+    /// until all records are retrieved. The `limit` set on the builder becomes
+    /// the page size; if not set, defaults to 100.
+    ///
+    /// # Safety limit
+    ///
+    /// Pass `max_records` to cap the total number of records fetched.
+    /// This prevents accidentally downloading entire large tables.
+    pub async fn execute_all(self, max_records: Option<u64>) -> Result<QueryResult> {
+        let mut paginator = self.paginate();
+        let mut all_records = Vec::new();
+        let mut all_errors = Vec::new();
+        let max = max_records.unwrap_or(u64::MAX);
+
+        while let Some(page) = paginator.next_page().await? {
+            all_errors.extend(page.errors);
+            all_records.extend(page.records);
+            if all_records.len() as u64 >= max {
+                all_records.truncate(max as usize);
+                break;
+            }
+        }
+
+        Ok(QueryResult {
+            records: all_records,
+            total_count: paginator.total_count(),
+            errors: all_errors,
+        })
+    }
+
+    /// Create a paginator for iterating through results page by page.
+    ///
+    /// The `limit` set on the builder becomes the page size (default: 100).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let mut paginator = client.table("incident")
+    ///     .equals("state", "1")
+    ///     .limit(100)
+    ///     .paginate();
+    ///
+    /// while let Some(page) = paginator.next_page().await? {
+    ///     for record in &page {
+    ///         println!("{}", record.get_str("number").unwrap_or("?"));
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn paginate(self) -> Paginator {
+        let page_size = self.limit.unwrap_or(100);
+        let params = self.build_params_without_pagination();
+        Paginator::new(
+            self.transport,
+            self.table,
+            params,
+            page_size,
+            self.display_value,
+        )
     }
 
     /// Get the count of matching records without fetching them.
@@ -385,24 +484,7 @@ impl TableApi {
 
     /// Build the query parameters for a GET request.
     fn build_params(&self) -> Vec<(String, String)> {
-        let mut params = Vec::new();
-
-        // Encoded query.
-        let query = encode_query(&self.conditions, &self.order_by);
-        if !query.is_empty() {
-            params.push(("sysparm_query".to_string(), query));
-        }
-
-        // Field selection.
-        if let Some(ref fields) = self.fields {
-            params.push(("sysparm_fields".to_string(), fields.join(",")));
-        }
-
-        // Display value mode.
-        params.push((
-            "sysparm_display_value".to_string(),
-            self.display_value.as_param().to_string(),
-        ));
+        let mut params = self.build_params_without_pagination();
 
         // Pagination.
         if let Some(limit) = self.limit {
@@ -411,6 +493,55 @@ impl TableApi {
         if let Some(offset) = self.offset {
             params.push(("sysparm_offset".to_string(), offset.to_string()));
         }
+
+        params
+    }
+
+    /// Build query params without pagination (for use by the Paginator,
+    /// which manages its own limit/offset).
+    fn build_params_without_pagination(&self) -> Vec<(String, String)> {
+        let mut params = Vec::new();
+
+        // Encoded query.
+        let query = encode_query(&self.conditions, &self.order_by);
+        if !query.is_empty() {
+            params.push(("sysparm_query".to_string(), query));
+        }
+
+        // Field selection: merge explicit fields + dot-walk fields.
+        let mut all_fields: Vec<String> = Vec::new();
+        if let Some(ref fields) = self.fields {
+            all_fields.extend(fields.iter().cloned());
+        }
+        all_fields.extend(self.dot_walk_fields.iter().cloned());
+
+        // If using DotWalk strategy with include_related, generate dot-walk
+        // field names from the schema relationships.
+        if self.strategy == FetchStrategy::DotWalk && !self.related.is_empty() {
+            if let Some(ref schema) = self.schema {
+                for rel_name in &self.related {
+                    if let Some(rel_def) = schema.relationship(&self.table, rel_name) {
+                        // Add commonly useful fields from the related table.
+                        // Get field names from schema if available.
+                        if let Some(related_table) = schema.table(&rel_def.table) {
+                            for field_name in related_table.fields.keys() {
+                                all_fields.push(format!("{}.{}", rel_name, field_name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !all_fields.is_empty() {
+            params.push(("sysparm_fields".to_string(), all_fields.join(",")));
+        }
+
+        // Display value mode.
+        params.push((
+            "sysparm_display_value".to_string(),
+            self.display_value.as_param().to_string(),
+        ));
 
         // Reference links.
         if self.exclude_reference_link {

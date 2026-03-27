@@ -59,6 +59,9 @@ impl Record {
     }
 
     /// Get a field value by name.
+    ///
+    /// Supports dot-walked field names (e.g., `"assigned_to.name"`) since
+    /// ServiceNow returns them as flat keys in the response.
     pub fn get(&self, field: &str) -> Option<&FieldValue> {
         self.fields.get(field)
     }
@@ -76,6 +79,24 @@ impl Record {
     /// Get a field's display string value.
     pub fn get_display(&self, field: &str) -> Option<&str> {
         self.fields.get(field).and_then(|fv| fv.display_str())
+    }
+
+    /// Get all dot-walked fields that start with a given prefix.
+    ///
+    /// For example, `dot_walked_fields("assigned_to")` returns fields like
+    /// `("assigned_to.name", value)`, `("assigned_to.email", value)`, etc.
+    pub fn dot_walked_fields(&self, prefix: &str) -> Vec<(&str, &FieldValue)> {
+        let prefix_dot = format!("{}.", prefix);
+        self.fields
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix_dot))
+            .map(|(k, v)| (k.as_str(), v))
+            .collect()
+    }
+
+    /// Check if a field exists (including dot-walked fields).
+    pub fn has_field(&self, field: &str) -> bool {
+        self.fields.contains_key(field)
     }
 
     /// Get all field names.

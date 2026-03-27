@@ -146,6 +146,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_reference_field_raw() {
+        // Reference fields with display_value=false return {link, value}.
+        let json = serde_json::json!({
+            "link": "https://instance.service-now.com/api/now/table/sys_user/abc123",
+            "value": "abc123"
+        });
+        let fv = parse_field_value(json, DisplayValue::Raw);
+        assert_eq!(fv.raw_str(), Some("abc123"));
+        assert!(fv.link.is_some());
+        assert!(fv.display_value.is_none());
+    }
+
+    #[test]
+    fn test_parse_reference_field_all() {
+        // Reference fields with display_value=all return {display_value, link, value}.
+        let json = serde_json::json!({
+            "display_value": "John Smith",
+            "link": "https://instance.service-now.com/api/now/table/sys_user/abc123",
+            "value": "abc123"
+        });
+        let fv = parse_field_value(json, DisplayValue::Both);
+        assert_eq!(fv.raw_str(), Some("abc123"));
+        assert_eq!(fv.display_str(), Some("John Smith"));
+        assert!(fv.link.is_some());
+    }
+
+    #[test]
     fn test_display_value_param() {
         assert_eq!(DisplayValue::Raw.as_param(), "false");
         assert_eq!(DisplayValue::Display.as_param(), "true");
