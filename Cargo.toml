@@ -1,0 +1,30 @@
+[package]
+name = "servicenow_rs"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust library for the ServiceNow REST API"
+license = "MIT"
+repository = "https://github.com/trepidity/servicenow_rs"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+async-trait = "0.1"
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+base64 = "0.22"
+futures = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+wiremock = "0.6"
+tempfile = "3"
+
+[features]
+default = ["table_api"]
+table_api = []
+codegen = []

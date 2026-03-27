@@ -1,0 +1,330 @@
+{
+  "release": "xanadu",
+  "tables": {
+    "task": {
+      "label": "Task",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "number": { "type": "string", "max_length": 40, "read_only": true, "label": "Number" },
+        "short_description": { "type": "string", "max_length": 160, "label": "Short description" },
+        "description": { "type": "string", "max_length": 4000, "label": "Description" },
+        "state": { "type": "integer", "label": "State" },
+        "priority": { "type": "integer", "label": "Priority", "choices": { "1": "Critical", "2": "High", "3": "Moderate", "4": "Low", "5": "Planning" } },
+        "urgency": { "type": "integer", "label": "Urgency", "choices": { "1": "High", "2": "Medium", "3": "Low" } },
+        "impact": { "type": "integer", "label": "Impact", "choices": { "1": "High", "2": "Medium", "3": "Low" } },
+        "assigned_to": { "type": "reference", "reference_table": "sys_user", "label": "Assigned to" },
+        "assignment_group": { "type": "reference", "reference_table": "sys_user_group", "label": "Assignment group" },
+        "opened_by": { "type": "reference", "reference_table": "sys_user", "label": "Opened by" },
+        "opened_at": { "type": "date_time", "label": "Opened" },
+        "closed_by": { "type": "reference", "reference_table": "sys_user", "label": "Closed by" },
+        "closed_at": { "type": "date_time", "label": "Closed" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" },
+        "sys_updated_on": { "type": "date_time", "read_only": true, "label": "Updated" },
+        "sys_created_by": { "type": "string", "read_only": true, "label": "Created by" },
+        "sys_updated_by": { "type": "string", "read_only": true, "label": "Updated by" },
+        "active": { "type": "boolean", "label": "Active" },
+        "work_notes": { "type": "journal_input", "label": "Work notes" },
+        "comments": { "type": "journal_input", "label": "Additional comments" },
+        "company": { "type": "reference", "reference_table": "core_company", "label": "Company" },
+        "contact_type": { "type": "string", "label": "Contact type" },
+        "approval": { "type": "string", "label": "Approval" }
+      },
+      "relationships": {}
+    },
+    "incident": {
+      "label": "Incident",
+      "extends": "task",
+      "fields": {
+        "category": { "type": "string", "label": "Category" },
+        "subcategory": { "type": "string", "label": "Subcategory" },
+        "caller_id": { "type": "reference", "reference_table": "sys_user", "label": "Caller" },
+        "resolved_by": { "type": "reference", "reference_table": "sys_user", "label": "Resolved by" },
+        "resolved_at": { "type": "date_time", "label": "Resolved" },
+        "reopen_count": { "type": "integer", "label": "Reopen count" },
+        "severity": { "type": "integer", "label": "Severity", "choices": { "1": "High", "2": "Medium", "3": "Low" } },
+        "incident_state": { "type": "integer", "label": "Incident state", "choices": { "1": "New", "2": "In Progress", "3": "On Hold", "6": "Resolved", "7": "Closed", "8": "Canceled" } },
+        "notify": { "type": "integer", "label": "Notify" },
+        "problem_id": { "type": "reference", "reference_table": "problem", "label": "Problem" },
+        "caused_by": { "type": "reference", "reference_table": "change_request", "label": "Caused by Change" },
+        "close_code": { "type": "string", "label": "Close code" },
+        "close_notes": { "type": "string", "max_length": 4000, "label": "Close notes" },
+        "hold_reason": { "type": "integer", "label": "On hold reason" },
+        "child_incidents": { "type": "integer", "read_only": true, "label": "Child incidents" }
+      },
+      "relationships": {
+        "child_incidents": {
+          "table": "incident",
+          "foreign_key": "parent_incident",
+          "type": "one_to_many"
+        }
+      }
+    },
+    "change_request": {
+      "label": "Change Request",
+      "extends": "task",
+      "fields": {
+        "type": { "type": "string", "label": "Type", "choices": { "standard": "Standard", "normal": "Normal", "emergency": "Emergency" } },
+        "risk": { "type": "integer", "label": "Risk", "choices": { "1": "High", "2": "Moderate", "3": "Low" } },
+        "category": { "type": "string", "label": "Category" },
+        "phase": { "type": "string", "label": "Phase" },
+        "phase_state": { "type": "string", "label": "Phase state" },
+        "reason": { "type": "string", "label": "Reason" },
+        "requested_by": { "type": "reference", "reference_table": "sys_user", "label": "Requested by" },
+        "start_date": { "type": "date_time", "label": "Planned start date" },
+        "end_date": { "type": "date_time", "label": "Planned end date" },
+        "cab_date": { "type": "date_time", "label": "CAB date" },
+        "cab_required": { "type": "boolean", "label": "CAB required" },
+        "implementation_plan": { "type": "string", "max_length": 4000, "label": "Implementation plan" },
+        "backout_plan": { "type": "string", "max_length": 4000, "label": "Backout plan" },
+        "test_plan": { "type": "string", "max_length": 4000, "label": "Test plan" },
+        "review_status": { "type": "string", "label": "Review status" },
+        "conflict_status": { "type": "string", "label": "Conflict status" },
+        "on_hold": { "type": "boolean", "label": "On hold" },
+        "on_hold_reason": { "type": "string", "label": "On hold reason" },
+        "close_code": { "type": "string", "label": "Close code" },
+        "close_notes": { "type": "string", "max_length": 4000, "label": "Close notes" }
+      },
+      "relationships": {
+        "change_task": {
+          "table": "change_task",
+          "foreign_key": "change_request",
+          "type": "one_to_many"
+        },
+        "approvals": {
+          "table": "sysapproval_approver",
+          "foreign_key": "sysapproval",
+          "type": "one_to_many"
+        },
+        "work_notes": {
+          "table": "sys_journal_field",
+          "foreign_key": "element_id",
+          "filter": "name=change_request",
+          "type": "one_to_many"
+        },
+        "affected_cis": {
+          "table": "task_ci",
+          "foreign_key": "task",
+          "type": "one_to_many"
+        }
+      }
+    },
+    "change_task": {
+      "label": "Change Task",
+      "extends": "task",
+      "fields": {
+        "change_request": { "type": "reference", "reference_table": "change_request", "label": "Change request" },
+        "change_task_type": { "type": "string", "label": "Change task type" },
+        "planned_start_date": { "type": "date_time", "label": "Planned start date" },
+        "planned_end_date": { "type": "date_time", "label": "Planned end date" },
+        "close_code": { "type": "string", "label": "Close code" },
+        "close_notes": { "type": "string", "max_length": 4000, "label": "Close notes" },
+        "on_hold": { "type": "boolean", "label": "On hold" },
+        "on_hold_reason": { "type": "string", "label": "On hold reason" }
+      },
+      "relationships": {}
+    },
+    "problem": {
+      "label": "Problem",
+      "extends": "task",
+      "fields": {
+        "category": { "type": "string", "label": "Category" },
+        "subcategory": { "type": "string", "label": "Subcategory" },
+        "cause_notes": { "type": "string", "max_length": 4000, "label": "Cause notes" },
+        "fix_notes": { "type": "string", "max_length": 4000, "label": "Fix notes" },
+        "known_error": { "type": "boolean", "label": "Known error" },
+        "major_problem": { "type": "boolean", "label": "Major problem" },
+        "problem_state": { "type": "integer", "label": "Problem state" },
+        "first_reported_by_task": { "type": "reference", "reference_table": "task", "label": "First reported by task" },
+        "related_incidents": { "type": "integer", "read_only": true, "label": "Related incidents" },
+        "confirmed_at": { "type": "date_time", "label": "Confirmed" },
+        "confirmed_by": { "type": "reference", "reference_table": "sys_user", "label": "Confirmed by" },
+        "resolved_by": { "type": "reference", "reference_table": "sys_user", "label": "Resolved by" },
+        "resolved_at": { "type": "date_time", "label": "Resolved" }
+      },
+      "relationships": {
+        "related_incidents": {
+          "table": "incident",
+          "foreign_key": "problem_id",
+          "type": "one_to_many"
+        }
+      }
+    },
+    "sc_request": {
+      "label": "Request",
+      "extends": "task",
+      "fields": {
+        "requested_for": { "type": "reference", "reference_table": "sys_user", "label": "Requested for" },
+        "delivery_address": { "type": "string", "label": "Delivery address" },
+        "price": { "type": "currency", "label": "Price" },
+        "special_instructions": { "type": "string", "max_length": 4000, "label": "Special instructions" }
+      },
+      "relationships": {
+        "requested_items": {
+          "table": "sc_req_item",
+          "foreign_key": "request",
+          "type": "one_to_many"
+        }
+      }
+    },
+    "sc_req_item": {
+      "label": "Requested Item",
+      "extends": "task",
+      "fields": {
+        "request": { "type": "reference", "reference_table": "sc_request", "label": "Request" },
+        "cat_item": { "type": "reference", "reference_table": "sc_cat_item", "label": "Item" },
+        "quantity": { "type": "integer", "label": "Quantity" },
+        "price": { "type": "currency", "label": "Price" },
+        "stage": { "type": "string", "label": "Stage" },
+        "configuration_item": { "type": "reference", "reference_table": "cmdb_ci", "label": "Configuration item" }
+      },
+      "relationships": {
+        "sc_tasks": {
+          "table": "sc_task",
+          "foreign_key": "request_item",
+          "type": "one_to_many"
+        }
+      }
+    },
+    "sc_task": {
+      "label": "Catalog Task",
+      "extends": "task",
+      "fields": {
+        "request_item": { "type": "reference", "reference_table": "sc_req_item", "label": "Request item" },
+        "request": { "type": "reference", "reference_table": "sc_request", "label": "Request" },
+        "sc_catalog": { "type": "reference", "reference_table": "sc_catalog", "label": "Catalog" }
+      },
+      "relationships": {}
+    },
+    "sys_user": {
+      "label": "User",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "user_name": { "type": "string", "max_length": 40, "label": "User ID" },
+        "first_name": { "type": "string", "max_length": 50, "label": "First name" },
+        "last_name": { "type": "string", "max_length": 50, "label": "Last name" },
+        "name": { "type": "string", "max_length": 151, "label": "Name" },
+        "email": { "type": "email", "label": "Email" },
+        "phone": { "type": "phone", "label": "Business phone" },
+        "mobile_phone": { "type": "phone", "label": "Mobile phone" },
+        "department": { "type": "reference", "reference_table": "cmn_department", "label": "Department" },
+        "company": { "type": "reference", "reference_table": "core_company", "label": "Company" },
+        "manager": { "type": "reference", "reference_table": "sys_user", "label": "Manager" },
+        "title": { "type": "string", "label": "Title" },
+        "active": { "type": "boolean", "label": "Active" },
+        "locked_out": { "type": "boolean", "label": "Locked out" },
+        "vip": { "type": "boolean", "label": "VIP" },
+        "location": { "type": "reference", "reference_table": "cmn_location", "label": "Location" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" },
+        "sys_updated_on": { "type": "date_time", "read_only": true, "label": "Updated" }
+      },
+      "relationships": {}
+    },
+    "sys_user_group": {
+      "label": "Group",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "name": { "type": "string", "max_length": 80, "label": "Name" },
+        "description": { "type": "string", "max_length": 1000, "label": "Description" },
+        "manager": { "type": "reference", "reference_table": "sys_user", "label": "Manager" },
+        "email": { "type": "email", "label": "Email" },
+        "parent": { "type": "reference", "reference_table": "sys_user_group", "label": "Parent" },
+        "active": { "type": "boolean", "label": "Active" },
+        "type": { "type": "string", "label": "Type" }
+      },
+      "relationships": {
+        "members": {
+          "table": "sys_user_grmember",
+          "foreign_key": "group",
+          "type": "one_to_many"
+        }
+      }
+    },
+    "sysapproval_approver": {
+      "label": "Approval",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "sysapproval": { "type": "reference", "reference_table": "task", "label": "Approval for" },
+        "approver": { "type": "reference", "reference_table": "sys_user", "label": "Approver" },
+        "state": { "type": "string", "label": "State", "choices": { "requested": "Requested", "approved": "Approved", "rejected": "Rejected", "not requested": "Not Yet Requested", "cancelled": "Cancelled" } },
+        "comments": { "type": "string", "max_length": 4000, "label": "Comments" },
+        "source_table": { "type": "string", "label": "Source table" },
+        "due_date": { "type": "date_time", "label": "Due date" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" },
+        "sys_updated_on": { "type": "date_time", "read_only": true, "label": "Updated" }
+      },
+      "relationships": {}
+    },
+    "cmdb_ci": {
+      "label": "Configuration Item",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "name": { "type": "string", "max_length": 255, "label": "Name" },
+        "sys_class_name": { "type": "sys_class_name", "label": "Class" },
+        "category": { "type": "string", "label": "Category" },
+        "subcategory": { "type": "string", "label": "Subcategory" },
+        "asset_tag": { "type": "string", "label": "Asset tag" },
+        "serial_number": { "type": "string", "label": "Serial number" },
+        "ip_address": { "type": "string", "label": "IP Address" },
+        "mac_address": { "type": "string", "label": "MAC Address" },
+        "operational_status": { "type": "integer", "label": "Operational status", "choices": { "1": "Operational", "2": "Non-Operational", "3": "Repair in Progress", "4": "DR Standby" } },
+        "install_status": { "type": "integer", "label": "Install status" },
+        "assigned_to": { "type": "reference", "reference_table": "sys_user", "label": "Assigned to" },
+        "managed_by": { "type": "reference", "reference_table": "sys_user", "label": "Managed by" },
+        "owned_by": { "type": "reference", "reference_table": "sys_user", "label": "Owned by" },
+        "supported_by": { "type": "reference", "reference_table": "sys_user_group", "label": "Supported by" },
+        "company": { "type": "reference", "reference_table": "core_company", "label": "Company" },
+        "department": { "type": "reference", "reference_table": "cmn_department", "label": "Department" },
+        "location": { "type": "reference", "reference_table": "cmn_location", "label": "Location" },
+        "environment": { "type": "string", "label": "Environment" },
+        "manufacturer": { "type": "reference", "reference_table": "core_company", "label": "Manufacturer" },
+        "model_id": { "type": "reference", "reference_table": "cmdb_model", "label": "Model ID" },
+        "short_description": { "type": "string", "max_length": 1000, "label": "Short description" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" },
+        "sys_updated_on": { "type": "date_time", "read_only": true, "label": "Updated" }
+      },
+      "relationships": {}
+    },
+    "kb_knowledge": {
+      "label": "Knowledge",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "number": { "type": "string", "max_length": 40, "read_only": true, "label": "Number" },
+        "short_description": { "type": "string", "max_length": 160, "label": "Short description" },
+        "text": { "type": "html", "label": "Text" },
+        "article_type": { "type": "string", "label": "Article type" },
+        "kb_knowledge_base": { "type": "reference", "reference_table": "kb_knowledge_base", "label": "Knowledge base" },
+        "kb_category": { "type": "reference", "reference_table": "kb_category", "label": "Category" },
+        "author": { "type": "reference", "reference_table": "sys_user", "label": "Author" },
+        "workflow_state": { "type": "string", "label": "Workflow state" },
+        "published": { "type": "date_time", "label": "Published" },
+        "valid_to": { "type": "date_time", "label": "Valid to" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" },
+        "sys_updated_on": { "type": "date_time", "read_only": true, "label": "Updated" }
+      },
+      "relationships": {}
+    },
+    "sys_journal_field": {
+      "label": "Journal Entry",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "element_id": { "type": "string", "label": "Element ID" },
+        "name": { "type": "string", "label": "Table name" },
+        "element": { "type": "string", "label": "Field name" },
+        "value": { "type": "string", "label": "Value" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" },
+        "sys_created_by": { "type": "string", "read_only": true, "label": "Created by" }
+      },
+      "relationships": {}
+    },
+    "task_ci": {
+      "label": "Task CI",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "task": { "type": "reference", "reference_table": "task", "label": "Task" },
+        "ci_item": { "type": "reference", "reference_table": "cmdb_ci", "label": "Configuration item" },
+        "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" }
+      },
+      "relationships": {}
+    }
+  }
+}
