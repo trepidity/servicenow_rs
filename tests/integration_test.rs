@@ -1343,6 +1343,50 @@ async fn test_journal_all_method() {
     assert_eq!(all.records[1].get_str("element"), Some("comments"));
 }
 
+#[tokio::test]
+async fn test_journal_inline() {
+    let server = MockServer::start().await;
+
+    // Mock returns journal fields with display values (formatted text).
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_display_value", "true"))
+        .and(query_param("sysparm_fields", "work_notes,comments"))
+        .and(query_param(
+            "sysparm_query",
+            "sys_id=inc_sys_id",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "inc_sys_id",
+                    "work_notes": "2026-03-27 10:00:00 - admin (Work notes)\nEscalated to network team\n\n2026-03-27 09:00:00 - admin (Work notes)\nInitial triage complete",
+                    "comments": "2026-03-27 11:00:00 - admin (Additional comments)\nWe are investigating this issue"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .journal_inline("incident", "inc_sys_id", &["work_notes", "comments"])
+        .first()
+        .await
+        .expect("journal_inline query failed")
+        .expect("record not found");
+
+    // work_notes contains formatted journal text.
+    let notes = record.get_str("work_notes").expect("work_notes missing");
+    assert!(notes.contains("Escalated to network team"));
+    assert!(notes.contains("Initial triage complete"));
+
+    // comments contains formatted journal text.
+    let comments = record.get_str("comments").expect("comments missing");
+    assert!(comments.contains("We are investigating this issue"));
+}
+
 // ── Browser URL tests ───────────────────────────────────────────
 
 #[tokio::test]

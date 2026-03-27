@@ -11,6 +11,7 @@ use crate::auth::Authenticator;
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
 use crate::model::record::Record;
+use crate::model::value::DisplayValue;
 use crate::prefix::PrefixRegistry;
 use crate::query::builder::TableApi;
 use crate::query::filter::Order;
@@ -186,6 +187,15 @@ impl ServiceNowClient {
     /// filtered by the record's sys_id and the specified field name.
     /// Chain `.order_by()`, `.limit()`, `.display_value()`, etc.
     ///
+    /// # Permissions
+    ///
+    /// This method queries the `sys_journal_field` table, which is
+    /// ACL-restricted on many ServiceNow instances. Non-admin users may
+    /// get **empty results with no error** even when journal entries exist.
+    /// If you encounter this, use [`journal_inline`](Self::journal_inline)
+    /// instead, which reads journal fields directly from the record table
+    /// and works regardless of `sys_journal_field` ACL configuration.
+    ///
     /// ```no_run
     /// # async fn example() -> servicenow_rs::error::Result<()> {
     /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
@@ -234,6 +244,14 @@ impl ServiceNowClient {
     /// Returns entries from both public comments and private work notes,
     /// sorted by creation time (newest first). Use the `element` field
     /// on each entry to distinguish: `"work_notes"` = private, `"comments"` = public.
+    ///
+    /// # Permissions
+    ///
+    /// This method queries the `sys_journal_field` table, which is
+    /// ACL-restricted on many ServiceNow instances. Non-admin users may
+    /// get **empty results with no error** even when journal entries exist.
+    /// If you encounter this, use [`journal_inline`](Self::journal_inline)
+    /// instead, which reads journal fields directly from the record table.
     pub fn journal_all(&self, table: &str, sys_id: &str) -> TableApi {
         self.table("sys_journal_field")
             .equals("element_id", sys_id)
@@ -246,6 +264,52 @@ impl ServiceNowClient {
                 "element_id",
             ])
             .order_by("sys_created_on", Order::Desc)
+    }
+
+    /// Read journal content directly from the record's own table.
+    ///
+    /// Unlike [`journal`](Self::journal) and [`journal_all`](Self::journal_all),
+    /// this method does **not** query `sys_journal_field`. Instead, it fetches the
+    /// specified journal fields (e.g. `work_notes`, `comments`) as columns on the
+    /// record itself, using `display_value=true` so ServiceNow returns the full
+    /// formatted journal text with timestamps and author names.
+    ///
+    /// This approach works regardless of `sys_journal_field` ACL restrictions and
+    /// is the recommended method when the per-entry breakdown is not required.
+    ///
+    /// # Trade-offs
+    ///
+    /// - Returns the **full concatenated journal text** per field, not individual
+    ///   entries. You get one string per field rather than separate records per entry.
+    /// - Always uses [`DisplayValue::Display`] — raw journal values are opaque
+    ///   internal formats and not useful for reading.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// // Read work_notes and comments for a single incident.
+    /// let record = client
+    ///     .journal_inline("incident", "abc123sys_id", &["work_notes", "comments"])
+    ///     .first()
+    ///     .await?
+    ///     .expect("record not found");
+    ///
+    /// if let Some(notes) = record.get_str("work_notes") {
+    ///     println!("Work notes:\n{notes}");
+    /// }
+    /// if let Some(comments) = record.get_str("comments") {
+    ///     println!("Comments:\n{comments}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn journal_inline(&self, table: &str, sys_id: &str, fields: &[&str]) -> TableApi {
+        self.table(table)
+            .equals("sys_id", sys_id)
+            .fields(fields)
+            .display_value(DisplayValue::Display)
     }
 
     // ── Browser URL Construction ────────────────────────────────────
