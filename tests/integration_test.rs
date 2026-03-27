@@ -2017,6 +2017,87 @@ async fn test_query_change_tasks_via_parent() {
     assert_eq!(tasks.records[2].get_str("parent"), Some("chg_sys_id"));
 }
 
+#[tokio::test]
+async fn test_create_and_link_change_task() {
+    // On many ServiceNow instances, `change_request` is read-only on POST
+    // but writable on PATCH. This test covers the two-step pattern:
+    // 1. Create the task with `parent` field
+    // 2. PATCH to set `change_request` so the UI shows it
+
+    let server = MockServer::start().await;
+
+    // Step 1: POST creates the task (change_request ignored on create).
+    Mock::given(method("POST"))
+        .and(path("/api/now/table/change_task"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "result": {
+                "sys_id": "ctask_new",
+                "number": "CTASK0010004",
+                "short_description": "Implementation — deploy changes",
+                "change_task_type": "implementation",
+                "parent": "chg_sys_id",
+                "change_request": "",
+                "state": "-5"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step 2: PATCH sets the change_request field.
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/change_task/ctask_new"))
+        .and(wiremock::matchers::body_json(json!({
+            "change_request": "chg_sys_id"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "ctask_new",
+                "number": "CTASK0010004",
+                "short_description": "Implementation — deploy changes",
+                "change_task_type": "implementation",
+                "parent": "chg_sys_id",
+                "change_request": "chg_sys_id",
+                "state": "-5"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    // Create.
+    let task = client
+        .table("change_task")
+        .create(json!({
+            "parent": "chg_sys_id",
+            "change_request": "chg_sys_id",
+            "short_description": "Implementation — deploy changes",
+            "change_task_type": "implementation",
+            "assignment_group": "grp_sys_id"
+        }))
+        .await
+        .expect("create change_task failed");
+
+    let task_sys_id = task.get_str("sys_id").unwrap_or("");
+    // change_request is empty after create.
+    assert_eq!(task.get_str("change_request"), Some(""));
+    assert_eq!(task.get_str("parent"), Some("chg_sys_id"));
+
+    // Link via PATCH.
+    let linked = client
+        .table("change_task")
+        .update(task_sys_id, json!({ "change_request": "chg_sys_id" }))
+        .await
+        .expect("link change_task failed");
+
+    // Now change_request is set.
+    assert_eq!(linked.get_str("change_request"), Some("chg_sys_id"));
+    assert_eq!(linked.get_str("parent"), Some("chg_sys_id"));
+    assert_eq!(linked.get_str("number"), Some("CTASK0010004"));
+}
+
 // ── Approval tests ──────────────────────────────────────────────
 
 #[tokio::test]
