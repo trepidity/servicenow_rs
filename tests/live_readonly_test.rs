@@ -265,3 +265,80 @@ async fn test_live_complex_filter() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_live_aggregate_count() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    let stats = client
+        .aggregate("incident")
+        .count()
+        .execute()
+        .await
+        .expect("aggregate count failed");
+
+    println!("Total incidents: {}", stats.count());
+    assert!(stats.count() > 0, "expected non-zero incident count");
+}
+
+#[tokio::test]
+async fn test_live_aggregate_grouped() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    let stats = client
+        .aggregate("incident")
+        .count()
+        .group_by("state")
+        .execute()
+        .await
+        .expect("aggregate grouped failed");
+
+    assert!(stats.is_grouped());
+    println!("Incident counts by state:");
+    for group in stats.groups() {
+        println!("  state={}: {}", group.field_value("state"), group.count());
+    }
+}
+
+#[tokio::test]
+async fn test_live_aggregate_with_filter() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    let stats = client
+        .aggregate("incident")
+        .count()
+        .equals("state", "1")
+        .execute()
+        .await
+        .expect("aggregate with filter failed");
+
+    println!("New incidents (state=1): {}", stats.count());
+}
+
+#[tokio::test]
+async fn test_live_count_method() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // Test the TableApi .count() convenience method.
+    let count = client
+        .table("incident")
+        .equals("state", "1")
+        .count()
+        .await
+        .expect("count failed");
+
+    println!("Incident count via .count(): {}", count);
+    assert!(count > 0);
+}

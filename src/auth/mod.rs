@@ -1,4 +1,5 @@
 pub mod basic;
+pub mod token;
 
 use async_trait::async_trait;
 use reqwest::RequestBuilder;
@@ -6,6 +7,7 @@ use reqwest::RequestBuilder;
 use crate::error::Result;
 
 pub use basic::BasicAuth;
+pub use token::TokenAuth;
 
 /// Trait for authentication strategies.
 ///

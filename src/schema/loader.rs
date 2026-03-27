@@ -98,9 +98,11 @@ pub fn load_bundled_definition(release: &str) -> Result<SchemaDefinition> {
     // Try to load from the bundled JSON embedded at compile time.
     let json = match release {
         "xanadu" => include_str!("../../definitions/base/xanadu.json"),
+        "yokohama" => include_str!("../../definitions/base/yokohama.json"),
+        "washington" => include_str!("../../definitions/base/washington.json"),
         _ => {
             return Err(Error::Schema(format!(
-                "unknown release '{}'. Available: xanadu",
+                "unknown release '{}'. Available: xanadu, yokohama, washington",
                 release
             )));
         }

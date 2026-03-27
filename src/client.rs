@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use url::Url;
 
+use crate::api::aggregate::AggregateApi;
 use crate::auth::basic::BasicAuth;
+use crate::auth::token::TokenAuth;
 use crate::auth::Authenticator;
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
@@ -79,6 +81,25 @@ impl ServiceNowClient {
             self.schema.as_ref().map(Arc::clone),
             name,
         )
+    }
+
+    /// Start building an aggregate/stats query on a table.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let stats = client.aggregate("incident")
+    ///     .count()
+    ///     .group_by("state")
+    ///     .execute()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn aggregate(&self, table: &str) -> AggregateApi {
+        AggregateApi::new(Arc::clone(&self.transport), table)
     }
 
     /// Get a reference to the schema registry, if loaded.
@@ -274,8 +295,18 @@ fn resolve_auth_from_config(config: &Config) -> Result<Arc<dyn Authenticator>> {
             })?;
             Ok(Arc::new(BasicAuth::new(username, password)))
         }
+        "token" | "bearer" => {
+            let token = config.auth.token.as_deref().ok_or_else(|| {
+                Error::Config(
+                    "token auth requires a token. Set SERVICENOW_API_TOKEN or \
+                     configure auth.token in servicenow.toml"
+                        .into(),
+                )
+            })?;
+            Ok(Arc::new(TokenAuth::bearer(token)))
+        }
         other => Err(Error::Config(format!(
-            "unsupported auth method '{}'. Available: basic",
+            "unsupported auth method '{}'. Available: basic, token",
             other
         ))),
     }

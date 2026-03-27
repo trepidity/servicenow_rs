@@ -782,3 +782,133 @@ async fn test_reference_field_parsing() {
     assert_eq!(assigned.raw_str(), Some("user123"));
     assert!(assigned.link.is_some());
 }
+
+#[tokio::test]
+async fn test_aggregate_count() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/stats/incident"))
+        .and(query_param("sysparm_count", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "stats": {
+                    "count": "700793"
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let stats = client.aggregate("incident").count().execute().await.unwrap();
+    assert_eq!(stats.count(), 700793);
+    assert!(!stats.is_grouped());
+}
+
+#[tokio::test]
+async fn test_aggregate_grouped() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/stats/incident"))
+        .and(query_param("sysparm_count", "true"))
+        .and(query_param("sysparm_group_by", "state"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "stats": {"count": "1772"},
+                    "groupby_fields": [{"field": "state", "value": "-5"}]
+                },
+                {
+                    "stats": {"count": "145"},
+                    "groupby_fields": [{"field": "state", "value": "1"}]
+                },
+                {
+                    "stats": {"count": "668"},
+                    "groupby_fields": [{"field": "state", "value": "2"}]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let stats = client
+        .aggregate("incident")
+        .count()
+        .group_by("state")
+        .execute()
+        .await
+        .unwrap();
+
+    assert!(stats.is_grouped());
+    assert_eq!(stats.group_count(), 3);
+    assert_eq!(stats.groups()[0].count(), 1772);
+    assert_eq!(stats.groups()[0].field_value("state"), "-5");
+    assert_eq!(stats.groups()[1].count(), 145);
+    assert_eq!(stats.groups()[1].field_value("state"), "1");
+}
+
+#[tokio::test]
+async fn test_aggregate_with_filter() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/stats/incident"))
+        .and(query_param("sysparm_count", "true"))
+        .and(query_param("sysparm_query", "active=true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "stats": {"count": "2585"}
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let stats = client
+        .aggregate("incident")
+        .count()
+        .equals("active", "true")
+        .execute()
+        .await
+        .unwrap();
+
+    assert_eq!(stats.count(), 2585);
+}
+
+#[tokio::test]
+async fn test_token_auth() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                { "sys_id": "abc", "number": "INC001" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Build client with token auth.
+    let client = ServiceNowClient::builder()
+        .instance(server.uri())
+        .auth(TokenAuth::bearer("my-secret-token"))
+        .build()
+        .await
+        .expect("build with token auth failed");
+
+    let result = client
+        .table("incident")
+        .limit(1)
+        .execute()
+        .await
+        .expect("query with token auth failed");
+
+    assert_eq!(result.len(), 1);
+}

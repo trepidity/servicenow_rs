@@ -54,7 +54,8 @@ pub mod transport;
 
 /// Convenience re-exports for common usage.
 pub mod prelude {
-    pub use crate::auth::BasicAuth;
+    pub use crate::api::aggregate::{AggregateApi, AggregateResult};
+    pub use crate::auth::{BasicAuth, TokenAuth};
     pub use crate::client::{ClientBuilder, ServiceNowClient};
     pub use crate::error::{Error, Result};
     pub use crate::model::{DisplayValue, FieldValue, QueryResult, Record};
