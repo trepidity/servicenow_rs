@@ -10,7 +10,10 @@ use crate::auth::token::TokenAuth;
 use crate::auth::Authenticator;
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
+use crate::model::record::Record;
+use crate::prefix::PrefixRegistry;
 use crate::query::builder::TableApi;
+use crate::query::filter::Order;
 use crate::schema::registry::SchemaRegistry;
 use crate::transport::http::HttpTransport;
 use crate::transport::retry::{RateLimiter, RetryConfig};
@@ -43,6 +46,8 @@ use crate::transport::retry::{RateLimiter, RetryConfig};
 pub struct ServiceNowClient {
     transport: Arc<HttpTransport>,
     schema: Option<Arc<SchemaRegistry>>,
+    prefix_registry: PrefixRegistry,
+    base_url: String,
 }
 
 impl ServiceNowClient {
@@ -106,6 +111,189 @@ impl ServiceNowClient {
     pub fn schema(&self) -> Option<&SchemaRegistry> {
         self.schema.as_deref()
     }
+
+    /// Get a reference to the prefix registry.
+    pub fn prefix_registry(&self) -> &PrefixRegistry {
+        &self.prefix_registry
+    }
+
+    /// Get the base instance URL.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    // ── Record Number Resolution ────────────────────────────────────
+
+    /// Resolve a record number prefix to a table name.
+    ///
+    /// ```
+    /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
+    /// assert_eq!(client.table_for_prefix("INC"), Some("incident"));
+    /// assert_eq!(client.table_for_prefix("CHG"), Some("change_request"));
+    /// # }
+    /// ```
+    pub fn table_for_prefix(&self, prefix: &str) -> Option<&str> {
+        self.prefix_registry.table_for_prefix(prefix)
+    }
+
+    /// Extract the prefix from a record number and resolve the table name.
+    ///
+    /// ```
+    /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
+    /// assert_eq!(client.table_for_number("INC0012345"), Some("incident"));
+    /// assert_eq!(client.table_for_number("CHG0307336"), Some("change_request"));
+    /// # }
+    /// ```
+    pub fn table_for_number(&self, number: &str) -> Option<&str> {
+        self.prefix_registry.table_for_number(number)
+    }
+
+    /// Fetch a record by its number (e.g., "INC0012345").
+    ///
+    /// Resolves the table from the prefix and queries by number.
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let record = client.get_by_number("INC0012345").await?;
+    /// if let Some(record) = record {
+    ///     println!("{}: {}", record.get_str("number").unwrap_or("?"),
+    ///         record.get_str("short_description").unwrap_or("?"));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_by_number(&self, number: &str) -> Result<Option<Record>> {
+        let table = self
+            .prefix_registry
+            .table_for_number(number)
+            .ok_or_else(|| {
+                Error::Query(format!(
+                    "cannot resolve table for number '{}' — unknown prefix. \
+                     Register it with .register_prefix() on the builder.",
+                    number
+                ))
+            })?;
+
+        self.table(table).equals("number", number).first().await
+    }
+
+    // ── Journal Entry Reading ───────────────────────────────────────
+
+    /// Read journal entries (work_notes, comments) for a record.
+    ///
+    /// Returns a `TableApi` pre-configured to query `sys_journal_field`
+    /// filtered by the record's sys_id and the specified field name.
+    /// Chain `.order_by()`, `.limit()`, `.display_value()`, etc.
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// use servicenow_rs::query::Order;
+    ///
+    /// // Read private work notes.
+    /// let notes = client.journal("incident", "abc123sys_id", "work_notes")
+    ///     .order_by("sys_created_on", Order::Desc)
+    ///     .limit(50)
+    ///     .execute()
+    ///     .await?;
+    ///
+    /// for entry in &notes {
+    ///     println!("{} by {}: {}",
+    ///         entry.get_str("sys_created_on").unwrap_or("?"),
+    ///         entry.get_str("sys_created_by").unwrap_or("?"),
+    ///         entry.get_str("value").unwrap_or(""),
+    ///     );
+    /// }
+    ///
+    /// // Read public comments.
+    /// let comments = client.journal("incident", "abc123sys_id", "comments")
+    ///     .limit(20)
+    ///     .execute()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn journal(&self, table: &str, sys_id: &str, field: &str) -> TableApi {
+        self.table("sys_journal_field")
+            .equals("element_id", sys_id)
+            .equals("element", field)
+            .equals("name", table)
+            .fields(&[
+                "sys_created_on",
+                "sys_created_by",
+                "value",
+                "element",
+                "element_id",
+            ])
+            .order_by("sys_created_on", Order::Desc)
+    }
+
+    /// Read all journal entries (both work_notes and comments) for a record.
+    ///
+    /// Returns entries from both public comments and private work notes,
+    /// sorted by creation time (newest first). Use the `element` field
+    /// on each entry to distinguish: `"work_notes"` = private, `"comments"` = public.
+    pub fn journal_all(&self, table: &str, sys_id: &str) -> TableApi {
+        self.table("sys_journal_field")
+            .equals("element_id", sys_id)
+            .equals("name", table)
+            .fields(&[
+                "sys_created_on",
+                "sys_created_by",
+                "value",
+                "element",
+                "element_id",
+            ])
+            .order_by("sys_created_on", Order::Desc)
+    }
+
+    // ── Browser URL Construction ────────────────────────────────────
+
+    /// Generate a URL that opens a record in the ServiceNow browser UI by number.
+    ///
+    /// ```
+    /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
+    /// let url = client.browser_url("incident", "INC0012345");
+    /// // "https://instance.service-now.com/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345"
+    /// # }
+    /// ```
+    pub fn browser_url(&self, table: &str, number: &str) -> String {
+        format!(
+            "{}/nav_to.do?uri={}.do?sysparm_query=number={}",
+            self.base_url, table, number
+        )
+    }
+
+    /// Generate a URL that opens a record in the ServiceNow browser UI by sys_id.
+    ///
+    /// ```
+    /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
+    /// let url = client.browser_url_by_id("incident", "abc123def456");
+    /// // "https://instance.service-now.com/nav_to.do?uri=incident.do?sys_id=abc123def456"
+    /// # }
+    /// ```
+    pub fn browser_url_by_id(&self, table: &str, sys_id: &str) -> String {
+        format!(
+            "{}/nav_to.do?uri={}.do?sys_id={}",
+            self.base_url, table, sys_id
+        )
+    }
+
+    /// Generate a browser URL from a record number, resolving the table from the prefix.
+    ///
+    /// Returns `None` if the prefix cannot be resolved.
+    ///
+    /// ```
+    /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
+    /// let url = client.browser_url_for_number("INC0012345");
+    /// // Some("https://instance.service-now.com/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345")
+    /// # }
+    /// ```
+    pub fn browser_url_for_number(&self, number: &str) -> Option<String> {
+        let table = self.prefix_registry.table_for_number(number)?;
+        Some(self.browser_url(table, number))
+    }
 }
 
 /// Builder for constructing a `ServiceNowClient` with layered configuration.
@@ -126,6 +314,7 @@ pub struct ClientBuilder {
     timeout: Option<Duration>,
     rate_limit: Option<u32>,
     allow_http: bool,
+    prefix_registry: Option<PrefixRegistry>,
 }
 
 impl ClientBuilder {
@@ -159,6 +348,18 @@ impl ClientBuilder {
     /// `http://` URLs, e.g., for wiremock or local test servers.
     pub fn allow_http(mut self) -> Self {
         self.allow_http = true;
+        self
+    }
+
+    /// Register a custom prefix -> table name mapping for record number resolution.
+    ///
+    /// The default mappings (INC -> incident, CHG -> change_request, etc.) are
+    /// always included. This adds or overrides additional mappings.
+    pub fn register_prefix(mut self, prefix: &str, table: &str) -> Self {
+        let reg = self
+            .prefix_registry
+            .get_or_insert_with(PrefixRegistry::default);
+        reg.register(prefix, table);
         self
     }
 
@@ -222,6 +423,7 @@ impl ClientBuilder {
             timeout,
             rate_limit,
             allow_http,
+            prefix_registry,
         } = self;
 
         // Resolve instance URL: builder override > config.
@@ -288,6 +490,8 @@ impl ClientBuilder {
         Ok(ServiceNowClient {
             transport,
             schema: schema.map(Arc::new),
+            prefix_registry: prefix_registry.unwrap_or_default(),
+            base_url: base_url_str,
         })
     }
 

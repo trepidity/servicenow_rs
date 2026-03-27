@@ -510,3 +510,116 @@ async fn test_live_separate_public_private_notes() {
         assert_eq!(r.get_str("element"), Some("comments"));
     }
 }
+
+// ── Record Number Resolution (live) ─────────────────────────────
+
+#[tokio::test]
+async fn test_live_get_by_number() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // Resolve a change request by number.
+    let record = client
+        .get_by_number("CHG0307336")
+        .await
+        .expect("get_by_number failed");
+
+    assert!(record.is_some(), "expected to find CHG0307336");
+    let record = record.unwrap();
+    assert_eq!(record.get_str("number"), Some("CHG0307336"));
+    println!(
+        "Resolved CHG0307336: {}",
+        record.get_str("short_description").unwrap_or("?")
+    );
+}
+
+#[tokio::test]
+async fn test_live_prefix_resolution() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    assert_eq!(client.table_for_number("INC0012345"), Some("incident"));
+    assert_eq!(
+        client.table_for_number("RITM2513403"),
+        Some("sc_req_item")
+    );
+    assert_eq!(client.table_for_number("UNKNOWN001"), None);
+}
+
+// ── Journal Reader Convenience (live) ───────────────────────────
+
+#[tokio::test]
+async fn test_live_journal_convenience() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    // Get an incident sys_id.
+    let inc = client
+        .table("incident")
+        .fields(&["sys_id", "number"])
+        .limit(1)
+        .execute()
+        .await
+        .expect("query failed");
+    let sys_id = &inc.records[0].sys_id;
+    let number = inc.records[0].get_str("number").unwrap_or("?");
+
+    // Use journal convenience method.
+    let notes = client
+        .journal("incident", sys_id, "work_notes")
+        .limit(5)
+        .execute()
+        .await
+        .expect("journal convenience failed");
+
+    println!(
+        "{}: {} work_notes via journal() method",
+        number,
+        notes.len()
+    );
+
+    // Use journal_all convenience method.
+    let all = client
+        .journal_all("incident", sys_id)
+        .limit(5)
+        .execute()
+        .await
+        .expect("journal_all convenience failed");
+
+    println!(
+        "{}: {} total journal entries via journal_all()",
+        number,
+        all.len()
+    );
+}
+
+// ── Browser URL Construction (live) ─────────────────────────────
+
+#[tokio::test]
+async fn test_live_browser_url() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    let url = client.browser_url("incident", "INC0012345");
+    assert!(url.contains("nav_to.do"));
+    assert!(url.contains("incident.do"));
+    assert!(url.contains("INC0012345"));
+    println!("Browser URL: {}", url);
+
+    let url_by_id = client.browser_url_by_id("incident", "abc123");
+    assert!(url_by_id.contains("sys_id=abc123"));
+
+    let url_for_number = client.browser_url_for_number("CHG0307336");
+    assert!(url_for_number.is_some());
+    let url_for_number = url_for_number.unwrap();
+    assert!(url_for_number.contains("change_request.do"));
+    println!("Browser URL for CHG: {}", url_for_number);
+}

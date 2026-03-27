@@ -48,6 +48,7 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod model;
+pub mod prefix;
 pub mod query;
 pub mod schema;
 pub mod transport;
@@ -59,6 +60,7 @@ pub mod prelude {
     pub use crate::client::{ClientBuilder, ServiceNowClient};
     pub use crate::error::{Error, Result};
     pub use crate::model::{DisplayValue, FieldValue, QueryResult, Record};
+    pub use crate::prefix::PrefixRegistry;
     pub use crate::query::{FetchStrategy, Operator, Order, Paginator};
     pub use crate::schema::SchemaRegistry;
 }

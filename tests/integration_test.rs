@@ -1144,3 +1144,255 @@ async fn test_schema_journal_field_metadata() {
     assert!(!sd.is_journal());
     assert!(!sd.read_only);
 }
+
+// ── Record Number Resolution tests ──────────────────────────────
+
+#[tokio::test]
+async fn test_prefix_resolution() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+
+    assert_eq!(client.table_for_prefix("INC"), Some("incident"));
+    assert_eq!(client.table_for_prefix("CHG"), Some("change_request"));
+    assert_eq!(client.table_for_prefix("CTASK"), Some("change_task"));
+    assert_eq!(client.table_for_prefix("PRB"), Some("problem"));
+    assert_eq!(client.table_for_prefix("RITM"), Some("sc_req_item"));
+
+    assert_eq!(client.table_for_number("INC0012345"), Some("incident"));
+    assert_eq!(
+        client.table_for_number("CHG0307336"),
+        Some("change_request")
+    );
+    assert_eq!(client.table_for_number("UNKNOWN001"), None);
+}
+
+#[tokio::test]
+async fn test_get_by_number() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_query", "number=INC0012345"))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "abc123",
+                    "number": "INC0012345",
+                    "short_description": "Network outage"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .get_by_number("INC0012345")
+        .await
+        .expect("get_by_number failed");
+
+    assert!(record.is_some());
+    let record = record.unwrap();
+    assert_eq!(record.get_str("number"), Some("INC0012345"));
+    assert_eq!(record.get_str("short_description"), Some("Network outage"));
+}
+
+#[tokio::test]
+async fn test_get_by_number_unknown_prefix() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+
+    let result = client.get_by_number("UNKNOWN001").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_custom_prefix_registration() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/u_custom_table"))
+        .and(query_param("sysparm_query", "number=MYPREFIX0001"))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                { "sys_id": "custom1", "number": "MYPREFIX0001" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = ServiceNowClient::builder()
+        .instance(server.uri())
+        .auth(BasicAuth::new("user", "pass"))
+        .allow_http()
+        .register_prefix("MYPREFIX", "u_custom_table")
+        .build()
+        .await
+        .expect("build failed");
+
+    assert_eq!(
+        client.table_for_number("MYPREFIX0001"),
+        Some("u_custom_table")
+    );
+
+    let record = client.get_by_number("MYPREFIX0001").await.unwrap();
+    assert!(record.is_some());
+}
+
+// ── Journal Reader tests ────────────────────────────────────────
+
+#[tokio::test]
+async fn test_journal_convenience_method() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sys_journal_field"))
+        .and(query_param(
+            "sysparm_query",
+            "element_id=inc_sys_id^element=work_notes^name=incident^ORDERBYDESCsys_created_on",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "jf001",
+                    "element_id": "inc_sys_id",
+                    "element": "work_notes",
+                    "value": "Escalated to network team",
+                    "sys_created_on": "2026-03-25 11:00:00",
+                    "sys_created_by": "admin"
+                },
+                {
+                    "sys_id": "jf002",
+                    "element_id": "inc_sys_id",
+                    "element": "work_notes",
+                    "value": "Checking network switch",
+                    "sys_created_on": "2026-03-25 10:00:00",
+                    "sys_created_by": "admin"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let notes = client
+        .journal("incident", "inc_sys_id", "work_notes")
+        .limit(10)
+        .execute()
+        .await
+        .expect("journal query failed");
+
+    assert_eq!(notes.len(), 2);
+    assert_eq!(
+        notes.records[0].get_str("value"),
+        Some("Escalated to network team")
+    );
+    assert_eq!(
+        notes.records[0].get_str("element"),
+        Some("work_notes")
+    );
+}
+
+#[tokio::test]
+async fn test_journal_all_method() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sys_journal_field"))
+        .and(query_param(
+            "sysparm_query",
+            "element_id=inc_sys_id^name=incident^ORDERBYDESCsys_created_on",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "jf001",
+                    "element": "work_notes",
+                    "value": "Private note",
+                    "sys_created_on": "2026-03-25 11:00:00",
+                    "sys_created_by": "admin"
+                },
+                {
+                    "sys_id": "jf002",
+                    "element": "comments",
+                    "value": "Public comment",
+                    "sys_created_on": "2026-03-25 10:00:00",
+                    "sys_created_by": "admin"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let all = client
+        .journal_all("incident", "inc_sys_id")
+        .limit(20)
+        .execute()
+        .await
+        .expect("journal_all query failed");
+
+    assert_eq!(all.len(), 2);
+    // First is private, second is public.
+    assert_eq!(all.records[0].get_str("element"), Some("work_notes"));
+    assert_eq!(all.records[1].get_str("element"), Some("comments"));
+}
+
+// ── Browser URL tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn test_browser_url() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+    let base = server.uri();
+
+    let url = client.browser_url("incident", "INC0012345");
+    assert_eq!(
+        url,
+        format!(
+            "{}/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345",
+            base
+        )
+    );
+}
+
+#[tokio::test]
+async fn test_browser_url_by_id() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+    let base = server.uri();
+
+    let url = client.browser_url_by_id("incident", "abc123def456");
+    assert_eq!(
+        url,
+        format!(
+            "{}/nav_to.do?uri=incident.do?sys_id=abc123def456",
+            base
+        )
+    );
+}
+
+#[tokio::test]
+async fn test_browser_url_for_number() {
+    let server = MockServer::start().await;
+    let client = test_client(&server).await;
+    let base = server.uri();
+
+    let url = client.browser_url_for_number("INC0012345");
+    assert!(url.is_some());
+    assert_eq!(
+        url.unwrap(),
+        format!(
+            "{}/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345",
+            base
+        )
+    );
+
+    // Unknown prefix returns None.
+    assert!(client.browser_url_for_number("UNKNOWN001").is_none());
+}
