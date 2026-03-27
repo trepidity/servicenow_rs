@@ -363,6 +363,130 @@ The `extends` field on `TableDef` declares that a table inherits fields and rela
 
 The `SchemaRegistry` methods `field()`, `relationship()`, and `relationships()` all walk this inheritance chain automatically.
 
+## Schema Field Attributes and Querying
+
+### Field-Level Boolean Attributes
+
+Each `FieldDef` in the schema carries three boolean attributes that control how a field can be used:
+
+| Attribute | Default | Purpose |
+|---|---|---|
+| `read_only` | `false` | Field is system-generated and cannot be set via the API. Examples: `sys_id`, `sys_created_on`, `number`, `approval_history`. The API silently ignores values provided for these fields on POST/PATCH. |
+| `mandatory` | `false` | Field is required when creating a record. A create request that omits a mandatory field will be rejected by ServiceNow with a validation error. Examples vary by table and instance configuration. |
+| `write_only` | `false` | Field accepts input on POST/PATCH but always returns an empty string on GET. This applies to journal-type fields like `work_notes` and `comments`. The field value is not stored on the record itself; ServiceNow writes it to the `sys_journal_field` table as an individual journal entry. |
+
+These attributes appear in the JSON schema definition files:
+
+```json
+{
+  "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+  "short_description": { "type": "string", "mandatory": true, "label": "Short description" },
+  "work_notes": { "type": "journal_input", "write_only": true, "label": "Work notes (private)" }
+}
+```
+
+### FieldDef Helper Methods
+
+The `FieldDef` struct in `src/schema/definition.rs` provides convenience methods for checking field characteristics:
+
+- **`is_writable()`** -- returns `true` if the field is not `read_only`. Note that write-only fields (journals) are considered writable because they accept POST/PATCH input.
+- **`is_journal()`** -- returns `true` if the field type is `Journal` or `JournalInput`. Use this to identify fields that behave as audit logs or note streams rather than normal data fields.
+- **`is_reference()`** -- returns `true` if the field type is `Reference` and a `reference_table` is set. Reference fields store a sys_id pointing to a record in another table.
+
+```rust
+let field = registry.field("incident", "work_notes").unwrap();
+assert!(field.is_writable());   // true -- journals accept writes
+assert!(field.is_journal());    // true -- journal_input type
+assert!(field.write_only);      // true -- GET always returns ""
+
+let sys_id = registry.field("incident", "sys_id").unwrap();
+assert!(!sys_id.is_writable()); // false -- read_only
+assert!(!sys_id.is_journal());  // false -- string type
+
+let assigned = registry.field("incident", "assigned_to").unwrap();
+assert!(assigned.is_reference());
+assert_eq!(assigned.reference_table.as_deref(), Some("sys_user"));
+```
+
+### SchemaRegistry Field Query Methods
+
+`SchemaRegistry` provides several methods that return filtered views of a table's fields. All of them walk the inheritance chain, so querying `incident` includes fields inherited from `task`.
+
+**`all_fields(table)`** -- returns every field defined on the table and its ancestors as a `Vec<(&str, &FieldDef)>`.
+
+**`writable_fields(table)`** -- returns only fields where `is_writable()` is true. Filters out system fields like `sys_id`, `sys_created_on`, and `number`. Useful for building create/update payloads.
+
+**`read_only_fields(table)`** -- returns only fields where `read_only` is true.
+
+**`mandatory_fields(table)`** -- returns only fields where `mandatory` is true. Use this to validate that all required fields are present before calling `create()`.
+
+**`journal_fields(table)`** -- returns only fields where `is_journal()` is true. For `incident`, this includes `work_notes`, `comments`, `comments_and_work_notes`, and `approval_history`.
+
+```rust
+let registry = client.schema().expect("schema not loaded");
+
+// List all writable fields for building an update form.
+let writable = registry.writable_fields("incident");
+println!("Writable fields on incident:");
+for (name, def) in &writable {
+    println!("  {} ({:?})", name, def.field_type);
+}
+
+// Validate mandatory fields before creating a record.
+let mandatory = registry.mandatory_fields("incident");
+let user_payload: HashMap<String, String> = get_user_input();
+for (name, _) in &mandatory {
+    if !user_payload.contains_key(*name) {
+        eprintln!("Missing required field: {}", name);
+    }
+}
+
+// Find all journal fields.
+let journals = registry.journal_fields("incident");
+let names: Vec<&str> = journals.iter().map(|(n, _)| *n).collect();
+// ["work_notes", "comments", "comments_and_work_notes", "approval_history"]
+```
+
+### New FieldType Variants
+
+Four field types were added beyond the original set:
+
+| JSON value | Rust variant | ServiceNow types | Notes |
+|---|---|---|---|
+| `"duration"` | `FieldType::Duration` | `glide_duration`, `timer` | Values are epoch-offset datetimes like `"1970-01-05 11:00:11"` representing a time span, not an absolute timestamp. Used for fields like `business_duration`, `calendar_duration`, and `time_worked`. Typically read-only when system-calculated. |
+| `"long"` | `FieldType::Long` | `longint`, `auto_increment` | 64-bit integer fields. Used for fields like `calendar_stc` and `business_stc` (duration in seconds). |
+| `"json"` | `FieldType::Json` | `json` | Fields storing structured data as a JSON string. The value is a string containing serialized JSON, not a parsed object. |
+| `"choice"` | `FieldType::Choice` | `choice` | Fields with predefined value sets. Functionally a string with a `choices` map, but semantically distinct from a plain string. The `choices` map on the `FieldDef` provides the value-to-label mapping. |
+
+### Filtering Writable Fields for a Create/Update Payload
+
+When building a create or update payload, filter the schema to exclude fields the API will reject or ignore:
+
+```rust
+let registry = client.schema().expect("schema not loaded");
+
+// Get writable fields (excludes read_only system fields).
+let writable = registry.writable_fields("change_request");
+
+// For a create payload, separate journal fields from regular fields.
+// Journal fields (work_notes, comments) can be included in a POST body,
+// but they behave differently: the value is written to sys_journal_field
+// rather than stored on the record.
+let mut payload = serde_json::Map::new();
+for (name, def) in &writable {
+    if let Some(user_value) = user_input.get(*name) {
+        payload.insert(name.to_string(), json!(user_value));
+    }
+}
+
+// Validate mandatory fields are present.
+for (name, _) in registry.mandatory_fields("change_request") {
+    if !payload.contains_key(name) {
+        return Err(format!("Missing mandatory field: {}", name));
+    }
+}
+```
+
 ## Creating Custom Overlays
 
 Overlays extend a base schema without modifying the bundled definition files. The overlay format uses `SchemaOverlay`:
@@ -485,6 +609,155 @@ The `TableApi` shorthand methods (`.equals()`, `.contains()`, etc.) push `Condit
 | `sysparm_no_count` | `.no_count()` if called |
 
 When using `FetchStrategy::DotWalk` with `include_related`, the schema is used to automatically generate dot-walked field names from the related table's field definitions.
+
+## Journal Field Internals
+
+Journal fields (work notes, comments) are one of the most confusing parts of the ServiceNow API. They do not behave like normal record fields. This section explains what happens at the API level and how the library models it.
+
+### How Journal Fields Work at the API Level
+
+ServiceNow journal fields have split read/write behavior:
+
+1. **Write-only on the record.** A POST or PATCH body can include `work_notes` or `comments` with a text value. ServiceNow accepts the value, creates a journal entry in the `sys_journal_field` table, and returns a response where the field value is an empty string. The record itself never stores the text.
+
+2. **GET always returns empty.** A standard GET request for an incident (or any task-based record) returns `""` for `work_notes`, `comments`, and `comments_and_work_notes`, regardless of how many journal entries exist. This is not a bug; it is by design.
+
+3. **`display_value=all` returns a concatenated string.** When the `sysparm_display_value=all` parameter is set, the `display_value` property of a journal field contains all journal entries concatenated together as a single formatted string. This is a quick way to retrieve notes but provides no structure (no per-entry timestamps or authors).
+
+4. **`sys_journal_field` stores individual entries.** Each journal entry is a separate record in the `sys_journal_field` table with these key fields:
+
+   | Field | Description |
+   |---|---|
+   | `element_id` | The sys_id of the parent record (e.g., the incident) |
+   | `name` | The table name the entry belongs to (e.g., `"incident"`, `"change_request"`) |
+   | `element` | Which journal field this entry is for: `"work_notes"` or `"comments"` |
+   | `value` | The text content of the journal entry |
+   | `sys_created_on` | When the entry was written |
+   | `sys_created_by` | Who wrote the entry |
+
+5. **ACL restrictions commonly block `sys_journal_field` reads.** Many ServiceNow instances restrict direct queries to `sys_journal_field` via ACL rules. If the service account does not have the `itil` role or a specific ACL grant, queries against this table return 403 or an empty result set. The `display_value=all` approach works as a fallback because it goes through the parent record's access controls instead.
+
+### Schema Representation
+
+The schema marks journal fields with two type variants and the `write_only` attribute:
+
+- **`journal_input`** (Rust: `FieldType::JournalInput`) -- fields that accept new entries via POST/PATCH. Examples: `work_notes`, `comments`. These are marked `write_only: true` in the schema.
+- **`journal`** (Rust: `FieldType::Journal`) -- read-only aggregated journal fields. Examples: `comments_and_work_notes`, `approval_history`. These are marked `read_only: true` in the schema.
+
+```json
+"work_notes": { "type": "journal_input", "write_only": true, "label": "Work notes (private)" },
+"comments": { "type": "journal_input", "write_only": true, "label": "Additional comments (public)" },
+"comments_and_work_notes": { "type": "journal", "read_only": true, "label": "Comments and work notes" },
+"approval_history": { "type": "journal", "read_only": true, "label": "Approval history" }
+```
+
+Use `FieldDef::is_journal()` to test for both variants, and check `write_only` or `read_only` to distinguish input fields from aggregated views.
+
+### The work_notes Relationship on change_request
+
+The bundled schema definitions include a relationship on `change_request` for fetching journal entries via the related record mechanism:
+
+```json
+"work_notes": {
+  "table": "sys_journal_field",
+  "foreign_key": "element_id",
+  "filter": "name=change_request",
+  "type": "one_to_many"
+}
+```
+
+The `filter` value `"name=change_request"` is critical. Without it, the query against `sys_journal_field` would match journal entries for any table that happens to share a sys_id with the parent record. The filter scopes the results to entries where the `name` column equals `"change_request"`, ensuring only journal entries belonging to change requests are returned.
+
+When using `include_related(&["work_notes"])`, the library issues a query like:
+
+```
+GET /api/now/table/sys_journal_field?sysparm_query=element_idINsys_id1,sys_id2^name=change_request
+```
+
+### Distinguishing Public from Private Notes
+
+Journal entries use the `element` field to indicate which journal stream they belong to:
+
+- **`element = "comments"`** -- public notes visible to the caller/requester. Referred to as "Additional comments" in the ServiceNow UI.
+- **`element = "work_notes"`** -- private/internal notes visible only to the fulfillment team. Referred to as "Work notes" in the ServiceNow UI.
+
+To separate them after querying `sys_journal_field`:
+
+```rust
+let journal = client
+    .table("sys_journal_field")
+    .equals("element_id", &incident_sys_id)
+    .fields(&["element", "value", "sys_created_on", "sys_created_by"])
+    .execute()
+    .await?;
+
+let work_notes: Vec<_> = journal
+    .iter()
+    .filter(|r| r.get_str("element") == Some("work_notes"))
+    .collect();
+
+let comments: Vec<_> = journal
+    .iter()
+    .filter(|r| r.get_str("element") == Some("comments"))
+    .collect();
+
+println!("Private (work_notes): {}", work_notes.len());
+println!("Public (comments): {}", comments.len());
+```
+
+Alternatively, filter at the query level to retrieve only one type:
+
+```rust
+let private_notes = client
+    .table("sys_journal_field")
+    .equals("element_id", &sys_id)
+    .equals("element", "work_notes")
+    .fields(&["value", "sys_created_on", "sys_created_by"])
+    .order_by("sys_created_on", Order::Desc)
+    .limit(10)
+    .execute()
+    .await?;
+```
+
+### Reading Notes: Two Approaches
+
+There are two ways to read journal entries, each with trade-offs:
+
+**Approach 1: `display_value=all` on the parent record.** Set `sysparm_display_value=all` and read the `display_value` property of the journal field. This returns all entries concatenated into a single string. It works even when `sys_journal_field` is ACL-blocked, but the result is unstructured text with no per-entry metadata.
+
+```rust
+let result = client
+    .table("incident")
+    .fields(&["number", "work_notes", "comments"])
+    .display_value(DisplayValue::Both)
+    .get(&sys_id)
+    .await?;
+
+// display_value has the concatenated text; raw value is still "".
+let notes_text = result.get_display("work_notes").unwrap_or("");
+```
+
+**Approach 2: Query `sys_journal_field` directly.** This returns individual entries with timestamps and authors, but requires that the service account has read access to `sys_journal_field`. If ACLs block it, fall back to approach 1.
+
+```rust
+let entries = client
+    .table("sys_journal_field")
+    .equals("element_id", &sys_id)
+    .equals("element", "work_notes")
+    .fields(&["value", "sys_created_on", "sys_created_by"])
+    .order_by("sys_created_on", Order::Desc)
+    .execute()
+    .await?;
+```
+
+### work_notes_list Is Not Journal Content
+
+The `work_notes_list` field on task-based tables is a `glide_list` (comma-separated sys_ids of `sys_user` records). It represents the subscriber list for work note notifications, not the journal content itself. Do not confuse it with `work_notes`:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `work_notes` | `journal_input` | Accepts new private journal entries on POST/PATCH |
+| `work_notes_list` | `glide_list` | Comma-separated sys_user sys_ids subscribed to work note notifications |
 
 ## Batch/Concurrent Fetching Strategy
 

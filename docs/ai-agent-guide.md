@@ -342,6 +342,30 @@ println!("Display: {:?}", state.display_str()); // Some("New")
 println!("Prefer display: {:?}", state.as_str()); // Some("New")
 ```
 
+### 2.12 Read Journal Entries
+
+Journal fields (`work_notes`, `comments`) are write-only on the parent record.
+Query `sys_journal_field` to read structured entries.
+
+```rust
+let entries = client.table("sys_journal_field")
+    .equals("element_id", "target_record_sys_id")  // sys_id of the incident/change/etc.
+    .equals("name", "incident")                     // table name of the parent record
+    .equals("element", "work_notes")                // "work_notes" or "comments"
+    .fields(&["element", "value", "sys_created_on", "sys_created_by"])
+    .order_by("sys_created_on", Order::Desc)
+    .limit(50)
+    .execute()
+    .await?;
+
+for entry in &entries {
+    println!("{} by {}: {}",
+        entry.get_str("sys_created_on").unwrap_or("?"),
+        entry.get_str("sys_created_by").unwrap_or("?"),
+        entry.get_str("value").unwrap_or(""));
+}
+```
+
 ---
 
 ## 3. Type Reference
@@ -707,6 +731,11 @@ src/schema/registry.rs
 | `.has_table(name)` | `bool` | Table exists? |
 | `.has_field(table, field)` | `bool` | Field exists? |
 | `.parent_table(table)` | `Option<&str>` | Parent via "extends" |
+| `.all_fields(table)` | `Vec<(&str, &FieldDef)>` | All fields including inherited (walks extends chain) |
+| `.writable_fields(table)` | `Vec<(&str, &FieldDef)>` | Fields where `is_writable()` is true (not read-only) |
+| `.read_only_fields(table)` | `Vec<(&str, &FieldDef)>` | Fields where `read_only` is true |
+| `.mandatory_fields(table)` | `Vec<(&str, &FieldDef)>` | Fields where `mandatory` is true |
+| `.journal_fields(table)` | `Vec<(&str, &FieldDef)>` | Fields where `is_journal()` is true (Journal/JournalInput types) |
 | `.schema()` | `&SchemaDefinition` | Full definition |
 
 ### 3.16 Schema Definition Types
@@ -719,11 +748,32 @@ src/schema/definition.rs
 
 **TableDef**: `{ label: String, extends: Option<String>, fields: HashMap<String, FieldDef>, relationships: HashMap<String, RelationshipDef> }`
 
-**FieldDef**: `{ field_type: FieldType, max_length: Option<u32>, read_only: bool, mandatory: bool, choices: Option<HashMap<String, String>>, reference_table: Option<String>, label: Option<String> }`
+**FieldDef**: `{ field_type: FieldType, max_length: Option<u32>, read_only: bool, mandatory: bool, write_only: bool, choices: Option<HashMap<String, String>>, reference_table: Option<String>, label: Option<String> }`
+
+- `read_only` -- system-generated fields (e.g., `sys_id`, `number`). Cannot be set via API.
+- `mandatory` -- required fields. Must be provided on create; should be provided on update.
+- `write_only` -- journal fields (`work_notes`, `comments`). Can be set via POST/PATCH but always return empty strings on GET. To read actual journal entries, query `sys_journal_field` directly (see Common Patterns).
+
+**FieldDef helper methods:**
+
+| Method | Returns | Description |
+|---|---|---|
+| `.is_writable()` | `bool` | `true` if the field is not read-only (i.e., can be set via API) |
+| `.is_journal()` | `bool` | `true` if `field_type` is `Journal` or `JournalInput` |
+| `.is_reference()` | `bool` | `true` if `field_type` is `Reference` and `reference_table` is set |
 
 **RelationshipDef**: `{ table: String, foreign_key: String, relationship_type: RelationshipType, filter: Option<String> }`
 
-**FieldType enum**: `String, Integer, Boolean, Decimal, Float, DateTime, Date, Time, Reference, Journal, JournalInput, GlideList, Url, Email, Phone, Currency, Price, Html, Script, Conditions, DocumentId, SysClassName, DomainId, Other`
+**FieldType enum**: `String, Integer, Boolean, Decimal, Float, DateTime, Date, Time, Reference, Journal, JournalInput, GlideList, Url, Email, Phone, Currency, Price, Html, Script, Conditions, DocumentId, SysClassName, DomainId, Duration, Json, Long, Choice, Other`
+
+Additional FieldType variants:
+
+| Variant | Description |
+|---|---|
+| `Duration` | Duration/timer fields (`glide_duration`, `timer`). Value is an epoch-offset datetime like `"1970-01-05 11:00:11"` representing a time span. |
+| `Json` | JSON-typed fields storing structured data as a JSON string. |
+| `Long` | 64-bit integer fields (`longint`, `auto_increment`). |
+| `Choice` | Choice fields with predefined values. Functionally a string with a `choices` map, but semantically distinct. |
 
 **RelationshipType enum**: `OneToMany, ManyToOne, ManyToMany`
 
@@ -1064,6 +1114,123 @@ while let Some(page) = paginator.next_page().await? {
         total_processed,
         paginator.total_count());
 }
+```
+
+### 5.6 Read Notes and Comments from a Record
+
+Journal fields (`work_notes`, `comments`) are write-only: you can POST/PATCH values
+into them, but GET always returns an empty string. There are two approaches to read
+the actual entries.
+
+**Approach 1: display_value=all on the parent record (reliable, concatenated string)**
+
+This returns the full journal history as a single concatenated string in the display
+value. It always works and does not require extra permissions, but the result is not
+structured (entries are separated by newlines with timestamps).
+
+```rust
+let record = client.table("incident")
+    .fields(&["number", "work_notes", "comments"])
+    .display_value(DisplayValue::Both)
+    .get("incident_sys_id")
+    .await?;
+
+// raw_str() will be empty; display_str() has the concatenated history
+let notes = record.get_display("work_notes").unwrap_or("(none)");
+let comments = record.get_display("comments").unwrap_or("(none)");
+println!("Work notes:\n{}", notes);
+println!("Customer comments:\n{}", comments);
+```
+
+**Approach 2: query sys_journal_field directly (structured, may be ACL-blocked)**
+
+The `sys_journal_field` table stores each journal entry as a separate record. This
+gives you structured data (author, timestamp, body) but may be blocked by ACLs on
+some instances.
+
+```rust
+// All journal entries for a specific incident
+let entries = client.table("sys_journal_field")
+    .equals("element_id", "incident_sys_id")   // sys_id of the parent record
+    .equals("name", "incident")                 // parent table name
+    .fields(&["element", "value", "sys_created_on", "sys_created_by"])
+    .order_by("sys_created_on", Order::Desc)
+    .limit(100)
+    .execute()
+    .await?;
+
+for entry in &entries {
+    let field = entry.get_str("element").unwrap_or("?");       // "comments" or "work_notes"
+    let author = entry.get_str("sys_created_by").unwrap_or("?");
+    let when = entry.get_str("sys_created_on").unwrap_or("?");
+    let body = entry.get_str("value").unwrap_or("");
+    println!("[{}] {} by {}: {}", when, field, author, body);
+}
+```
+
+**Separating public comments from private work notes:**
+
+```rust
+// Public comments only (visible to the caller/customer)
+let public = client.table("sys_journal_field")
+    .equals("element_id", "incident_sys_id")
+    .equals("name", "incident")
+    .equals("element", "comments")
+    .order_by("sys_created_on", Order::Desc)
+    .execute()
+    .await?;
+
+// Private work notes only (internal to the team)
+let private = client.table("sys_journal_field")
+    .equals("element_id", "incident_sys_id")
+    .equals("name", "incident")
+    .equals("element", "work_notes")
+    .order_by("sys_created_on", Order::Desc)
+    .execute()
+    .await?;
+```
+
+### 5.7 Check Which Fields Are Writable Before Creating a Record
+
+Use `writable_fields()` and `mandatory_fields()` from the schema registry to
+discover which fields you can set and which ones you must provide.
+
+```rust
+let schema = client.schema().expect("schema must be loaded");
+
+// All fields that can be set via POST/PATCH
+let writable = schema.writable_fields("incident");
+println!("Writable fields on incident:");
+for (name, field_def) in &writable {
+    println!("  {} ({:?})", name, field_def.field_type);
+}
+
+// Fields that must be provided on create
+let required = schema.mandatory_fields("incident");
+println!("\nMandatory fields on incident:");
+for (name, field_def) in &required {
+    println!("  {} ({:?})", name, field_def.field_type);
+}
+
+// Journal fields (write-only -- can set but will read back empty)
+let journals = schema.journal_fields("incident");
+println!("\nJournal (write-only) fields:");
+for (name, _) in &journals {
+    println!("  {}", name);
+}
+
+// Example: build a create payload ensuring all mandatory fields are present
+let mandatory_names: Vec<&str> = required.iter().map(|(n, _)| *n).collect();
+println!("\nBefore creating, ensure you provide: {:?}", mandatory_names);
+
+let record = client.table("incident")
+    .create(serde_json::json!({
+        "short_description": "New issue",       // mandatory
+        "caller_id": "some_user_sys_id",        // mandatory
+        "urgency": "2",
+        "work_notes": "Created by automation"   // write-only journal field
+    }))
+    .await?;
 ```
 
 ---

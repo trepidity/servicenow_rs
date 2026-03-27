@@ -614,6 +614,206 @@ assert!(registry.has_table("incident"));
 assert!(registry.has_field("change_request", "risk"));
 ```
 
+## Journal Fields (Notes and Comments)
+
+ServiceNow journal fields (`work_notes`, `comments`) behave differently from normal fields. They are **write-only**: you can POST a value to append a new entry, but a subsequent GET always returns an empty string for the `value` property. This is a fundamental ServiceNow platform behavior, not a library limitation.
+
+### Writing Journal Entries
+
+To add a work note or comment, include the field in a create or update payload:
+
+```rust
+use serde_json::json;
+
+// Add a work note to an existing incident
+client.table("incident")
+    .update("abc123", json!({
+        "work_notes": "Checked the server logs, no errors found."
+    }))
+    .await?;
+
+// Add a public comment
+client.table("incident")
+    .update("abc123", json!({
+        "comments": "We are investigating your issue."
+    }))
+    .await?;
+```
+
+### Reading Journal Entries via display_value
+
+The simplest way to read journal content is to request `display_value=all` on the parent record. The `display_value` property returns all journal entries concatenated into a single string:
+
+```rust
+use servicenow_rs::model::DisplayValue;
+
+let result = client.table("incident")
+    .equals("number", "INC0010001")
+    .fields(&["number", "work_notes", "comments"])
+    .display_value(DisplayValue::Both)
+    .first()
+    .await?;
+
+if let Some(record) = result {
+    // raw value is always empty for journal fields
+    let raw = record.get_raw("work_notes");         // Some("")
+
+    // display_value contains concatenated entries
+    let notes = record.get_display("work_notes");   // Some("2024-01-15 10:30:00 - admin\nChecked logs\n\n...")
+    let comments = record.get_display("comments");  // Some("2024-01-15 09:00:00 - admin\nWe are investigating\n\n...")
+    println!("Work notes:\n{}", notes.unwrap_or("(none)"));
+}
+```
+
+This approach is easy but returns a flat string. You cannot reliably parse individual entries, timestamps, or authors from the concatenated output.
+
+### Reading Structured Entries via sys_journal_field
+
+For structured access to individual journal entries, query the `sys_journal_field` table directly. Each row is one journal entry with its own timestamp, author, and body. The `element` field distinguishes between entry types:
+
+- `element = "comments"` -- public customer-visible comments
+- `element = "work_notes"` -- private internal work notes
+
+```rust
+// Fetch all journal entries for a specific incident, newest first
+let entries = client.table("sys_journal_field")
+    .equals("name", "incident")                     // parent table name
+    .equals("element_id", "abc123_sys_id")          // parent record sys_id
+    .order_by("sys_created_on", Order::Desc)
+    .fields(&["element", "value", "sys_created_on", "sys_created_by"])
+    .execute()
+    .await?;
+
+for entry in &entries {
+    let kind = entry.get_str("element").unwrap_or("?");       // "comments" or "work_notes"
+    let body = entry.get_str("value").unwrap_or("");
+    let author = entry.get_str("sys_created_by").unwrap_or("?");
+    let time = entry.get_str("sys_created_on").unwrap_or("?");
+    println!("[{}] {} by {} at {}", kind, body, author, time);
+}
+
+// Filter to only public comments
+let public = client.table("sys_journal_field")
+    .equals("name", "incident")
+    .equals("element_id", "abc123_sys_id")
+    .equals("element", "comments")
+    .execute()
+    .await?;
+
+// Filter to only private work notes
+let private = client.table("sys_journal_field")
+    .equals("name", "incident")
+    .equals("element_id", "abc123_sys_id")
+    .equals("element", "work_notes")
+    .execute()
+    .await?;
+```
+
+Note that ACLs may restrict access to `sys_journal_field`. The querying user must have read access to this table, which some ServiceNow instances restrict to admin or ITIL roles.
+
+### Using include_related for Journal Entries
+
+If the schema defines a relationship for journal entries (e.g., `work_notes` on `change_request`), you can use `include_related` to fetch them alongside the parent record:
+
+```rust
+let result = client.table("change_request")
+    .equals("number", "CHG0012345")
+    .include_related(&["work_notes"])
+    .execute()
+    .await?;
+
+for record in &result {
+    for note in record.related("work_notes") {
+        println!("  Note: {}", note.get_str("value").unwrap_or("?"));
+    }
+}
+```
+
+### Common Pitfall: work_notes_list
+
+The `work_notes_list` field is a `glide_list` (comma-separated sys_ids of users), not a journal field. It controls which users receive email notifications when work notes are added. Do not confuse it with journal content.
+
+## Field Attributes and Schema Helpers
+
+The schema system tracks per-field metadata beyond the data type. Each `FieldDef` carries `read_only`, `mandatory`, and `write_only` attributes that let you reason about which fields to include in API requests.
+
+### Field Attributes
+
+| Attribute | Meaning | Example Fields |
+|---|---|---|
+| `read_only` | System-generated, cannot be set via POST/PATCH | `sys_id`, `number`, `sys_created_on` |
+| `mandatory` | Required when creating a record | `short_description` |
+| `write_only` | Can be set but GET always returns empty | `work_notes`, `comments` |
+
+### FieldDef Helper Methods
+
+`FieldDef` provides convenience methods for common checks:
+
+```rust
+let registry = SchemaRegistry::from_release("xanadu")?;
+
+let field = registry.field("incident", "assigned_to").unwrap();
+field.is_writable();    // true -- not read-only, safe to include in POST/PATCH
+field.is_reference();   // true -- reference field pointing to sys_user
+field.is_journal();     // false
+
+let field = registry.field("incident", "work_notes").unwrap();
+field.is_journal();     // true -- Journal or JournalInput type
+field.is_writable();    // true -- can be written (it is write-only, not read-only)
+field.write_only;       // true -- GET returns empty
+
+let field = registry.field("incident", "sys_id").unwrap();
+field.is_writable();    // false -- read-only system field
+field.read_only;        // true
+```
+
+### SchemaRegistry Query Methods
+
+The `SchemaRegistry` provides bulk query methods that walk the full inheritance chain (e.g., `incident` -> `task`). Each returns a `Vec<(&str, &FieldDef)>` of `(field_name, definition)` pairs:
+
+```rust
+let registry = SchemaRegistry::from_release("xanadu")?;
+
+// All fields including inherited ones (incident's own fields + task fields)
+let all = registry.all_fields("incident");
+println!("{} total fields on incident", all.len());
+
+// Fields safe to include in POST/PATCH payloads
+let writable = registry.writable_fields("incident");
+for (name, _def) in &writable {
+    print!("{} ", name);    // short_description, state, assigned_to, work_notes, ...
+}
+
+// System-generated fields you should not try to set
+let read_only = registry.read_only_fields("incident");
+for (name, _def) in &read_only {
+    print!("{} ", name);    // sys_id, number, sys_created_on, sys_updated_on, ...
+}
+
+// Fields required when creating a new record
+let mandatory = registry.mandatory_fields("incident");
+for (name, _def) in &mandatory {
+    print!("{} ", name);    // short_description, ...
+}
+
+// Journal-type fields (work_notes, comments, approval_history, etc.)
+let journals = registry.journal_fields("incident");
+for (name, _def) in &journals {
+    print!("{} ", name);    // work_notes, comments, comments_and_work_notes, approval_history
+}
+```
+
+### New FieldType Variants
+
+The following `FieldType` variants cover ServiceNow types not present in earlier versions of the schema:
+
+| Variant | ServiceNow Types | Notes |
+|---|---|---|
+| `Duration` | `glide_duration`, timer | Value is stored as an epoch-offset datetime like `"1970-01-05 11:00:11"` representing a time span. Fields such as `business_duration`, `calendar_duration`, and `time_worked` use this type. |
+| `Long` | longint, auto_increment | 64-bit integer fields. Used for `calendar_stc` and `business_stc` (duration in seconds). |
+| `Json` | JSON | Fields storing structured data as a JSON string. |
+| `Choice` | choice | Functionally a string with a predefined `choices` map. Semantically distinct from a plain string to allow UI and validation tooling to enumerate allowed values. |
+
 ## Display Values
 
 ServiceNow fields can return raw database values, human-readable display values, or both. Control this with `DisplayValue`:
