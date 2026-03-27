@@ -531,7 +531,10 @@ async fn test_dot_walk_fields() {
     assert_eq!(result.len(), 1);
     let record = &result.records[0];
     assert_eq!(record.get_str("assigned_to.name"), Some("John Smith"));
-    assert_eq!(record.get_str("assigned_to.email"), Some("john@example.com"));
+    assert_eq!(
+        record.get_str("assigned_to.email"),
+        Some("john@example.com")
+    );
     assert!(record.has_field("assigned_to.name"));
 
     // Test dot_walked_fields helper.
@@ -641,10 +644,7 @@ async fn test_pagination() {
     let client = test_client(&server).await;
 
     // Test paginate() manual iteration.
-    let mut paginator = client
-        .table("incident")
-        .limit(2)
-        .paginate();
+    let mut paginator = client.table("incident").limit(2).paginate().unwrap();
 
     let page1 = paginator.next_page().await.unwrap().unwrap();
     assert_eq!(page1.len(), 2);
@@ -807,7 +807,12 @@ async fn test_aggregate_count() {
 
     let client = test_client(&server).await;
 
-    let stats = client.aggregate("incident").count().execute().await.unwrap();
+    let stats = client
+        .aggregate("incident")
+        .count()
+        .execute()
+        .await
+        .unwrap();
     assert_eq!(stats.count(), 700793);
     assert!(!stats.is_grouped());
 }
@@ -946,7 +951,12 @@ async fn test_journal_fields_return_empty_on_get() {
 
     let result = client
         .table("incident")
-        .fields(&["number", "work_notes", "comments", "comments_and_work_notes"])
+        .fields(&[
+            "number",
+            "work_notes",
+            "comments",
+            "comments_and_work_notes",
+        ])
         .execute()
         .await
         .expect("journal field query failed");
@@ -1111,18 +1121,18 @@ async fn test_change_request_work_notes_relationship() {
     assert_eq!(result.len(), 1);
     let chg = &result.records[0];
     let notes = chg.related("work_notes");
-    assert_eq!(notes.len(), 2, "expected 2 journal entries via relationship");
     assert_eq!(
-        notes[0].get_str("element"),
-        Some("work_notes")
+        notes.len(),
+        2,
+        "expected 2 journal entries via relationship"
     );
+    assert_eq!(notes[0].get_str("element"), Some("work_notes"));
 }
 
 #[tokio::test]
 async fn test_schema_journal_field_metadata() {
     // Verify schema correctly identifies journal fields.
-    let registry =
-        servicenow_rs::schema::SchemaRegistry::from_release("xanadu").unwrap();
+    let registry = servicenow_rs::schema::SchemaRegistry::from_release("xanadu").unwrap();
 
     // work_notes should be journal, write-only.
     let wn = registry.field("incident", "work_notes").unwrap();
@@ -1291,10 +1301,7 @@ async fn test_journal_convenience_method() {
         notes.records[0].get_str("value"),
         Some("Escalated to network team")
     );
-    assert_eq!(
-        notes.records[0].get_str("element"),
-        Some("work_notes")
-    );
+    assert_eq!(notes.records[0].get_str("element"), Some("work_notes"));
 }
 
 #[tokio::test]
@@ -1395,7 +1402,7 @@ async fn test_browser_url() {
     let client = test_client(&server).await;
     let base = server.uri();
 
-    let url = client.browser_url("incident", "INC0012345");
+    let url = client.browser_url("incident", "INC0012345").unwrap();
     assert_eq!(
         url,
         format!(
@@ -1411,13 +1418,12 @@ async fn test_browser_url_by_id() {
     let client = test_client(&server).await;
     let base = server.uri();
 
-    let url = client.browser_url_by_id("incident", "abc123def456");
+    let url = client
+        .browser_url_by_id("incident", "abc123def456")
+        .unwrap();
     assert_eq!(
         url,
-        format!(
-            "{}/nav_to.do?uri=incident.do?sys_id=abc123def456",
-            base
-        )
+        format!("{}/nav_to.do?uri=incident.do?sys_id=abc123def456", base)
     );
 }
 
@@ -1430,7 +1436,7 @@ async fn test_browser_url_for_number() {
     let url = client.browser_url_for_number("INC0012345");
     assert!(url.is_some());
     assert_eq!(
-        url.unwrap(),
+        url.unwrap().unwrap(),
         format!(
             "{}/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345",
             base

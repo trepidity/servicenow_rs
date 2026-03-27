@@ -47,13 +47,8 @@ pub async fn fetch_related_concurrent(
             let rel_def = (*rel_def).clone();
 
             async move {
-                let result = fetch_relationship(
-                    &transport,
-                    &sys_id_list,
-                    &rel_def,
-                    display_value,
-                )
-                .await;
+                let result =
+                    fetch_relationship(&transport, &sys_id_list, &rel_def, display_value).await;
                 (rel_name, rel_def, result)
             }
         })
@@ -116,7 +111,7 @@ async fn fetch_relationship(
         query.push_str(filter);
     }
 
-    let path = format!("/api/now/table/{}", rel_def.table);
+    let path = format!("{}/{}", crate::api::table::TABLE_API_PATH, rel_def.table);
     let params = vec![
         ("sysparm_query".to_string(), query),
         (
@@ -127,6 +122,8 @@ async fn fetch_relationship(
             "sysparm_exclude_reference_link".to_string(),
             "true".to_string(),
         ),
+        // Cap related-record fetches to prevent silently truncated results.
+        ("sysparm_limit".to_string(), "10000".to_string()),
     ];
 
     let response = transport.get(&path, &params).await?;

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use reqwest::RequestBuilder;
 
 use crate::error::Result;
@@ -82,12 +82,6 @@ impl Authenticator for BasicAuth {
         "basic"
     }
 }
-
-// Redact password from debug output — the derived Debug above shows
-// the struct fields. Let's keep `password` hidden.
-// We already derive Debug, but the encoded string reveals creds.
-// For production use, consider a manual Debug impl. For now, this is acceptable
-// since the library consumer controls where debug output goes.
 
 #[cfg(test)]
 mod tests {

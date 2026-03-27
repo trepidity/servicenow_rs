@@ -7,7 +7,11 @@ use super::definition::{SchemaDefinition, SchemaOverlay, TableDef};
 /// Load a schema definition from a JSON file.
 pub fn load_definition(path: &Path) -> Result<SchemaDefinition> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        Error::Schema(format!("failed to read schema file {}: {}", path.display(), e))
+        Error::Schema(format!(
+            "failed to read schema file {}: {}",
+            path.display(),
+            e
+        ))
     })?;
     serde_json::from_str(&content).map_err(|e| {
         Error::Schema(format!(
@@ -58,7 +62,9 @@ pub fn merge_overlay(base: &mut SchemaDefinition, overlay: &SchemaOverlay) {
         if let Some(existing) = base.tables.get_mut(table_name) {
             // Merge fields (overlay wins).
             for (field_name, field_def) in &table_overlay.fields {
-                existing.fields.insert(field_name.clone(), field_def.clone());
+                existing
+                    .fields
+                    .insert(field_name.clone(), field_def.clone());
             }
             // Merge relationships (overlay wins).
             for (rel_name, rel_def) in &table_overlay.relationships {

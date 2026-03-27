@@ -11,7 +11,7 @@ use crate::schema::registry::SchemaRegistry;
 use crate::transport::http::HttpTransport;
 
 use super::batch;
-use super::filter::{Condition, Filter, Joiner, Operator, Order, encode_query};
+use super::filter::{encode_query, Condition, Filter, Joiner, Operator, Order};
 use super::paginator::Paginator;
 use super::strategy::FetchStrategy;
 
@@ -61,7 +61,7 @@ pub struct TableApi {
 }
 
 /// Validate that a table name or sys_id contains only safe characters.
-fn validate_identifier(value: &str, kind: &str) -> Result<()> {
+pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<()> {
     if value.is_empty() {
         return Err(Error::Query(format!("{} cannot be empty", kind)));
     }
@@ -193,8 +193,7 @@ impl TableApi {
     /// Requires a schema to be loaded so the library knows how to
     /// traverse the relationship.
     pub fn include_related(mut self, relations: &[&str]) -> Self {
-        self.related
-            .extend(relations.iter().map(|s| s.to_string()));
+        self.related.extend(relations.iter().map(|s| s.to_string()));
         self
     }
 
@@ -275,8 +274,8 @@ impl TableApi {
     /// Execute the query and return all matching records.
     pub async fn execute(self) -> Result<QueryResult> {
         validate_identifier(&self.table, "table name")?;
-        let path = format!("/api/now/table/{}", self.table);
-        let params = self.build_params();
+        let path = format!("{}/{}", crate::api::table::TABLE_API_PATH, self.table);
+        let params = self.build_params()?;
 
         debug!(
             table = self.table,
@@ -323,10 +322,10 @@ impl TableApi {
     /// Defaults to 10,000 if `None` to prevent accidentally downloading
     /// entire large tables. Pass `Some(u64::MAX)` to truly fetch everything.
     pub async fn execute_all(self, max_records: Option<u64>) -> Result<QueryResult> {
-        let mut paginator = self.paginate();
+        let mut paginator = self.paginate()?;
         let mut all_records = Vec::new();
         let mut all_errors = Vec::new();
-        let max = max_records.unwrap_or(10_000);
+        let max = max_records.unwrap_or(crate::api::table::DEFAULT_MAX_RECORDS);
 
         while let Some(page) = paginator.next_page().await? {
             all_errors.extend(page.errors);
@@ -356,7 +355,7 @@ impl TableApi {
     /// let mut paginator = client.table("incident")
     ///     .equals("state", "1")
     ///     .limit(100)
-    ///     .paginate();
+    ///     .paginate()?;
     ///
     /// while let Some(page) = paginator.next_page().await? {
     ///     for record in &page {
@@ -366,25 +365,26 @@ impl TableApi {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn paginate(self) -> Paginator {
-        let page_size = self.limit.unwrap_or(100);
-        let params = self.build_params_without_pagination();
-        Paginator::new(
+    pub fn paginate(self) -> Result<Paginator> {
+        let page_size = self.limit.unwrap_or(crate::api::table::DEFAULT_PAGE_SIZE);
+        let params = self.build_params_without_pagination()?;
+        Ok(Paginator::new(
             self.transport,
             self.table,
             params,
             page_size,
             self.display_value,
-        )
+        ))
     }
 
     /// Get the count of matching records without fetching them.
     pub async fn count(self) -> Result<u64> {
-        let path = format!("/api/now/stats/{}", self.table);
+        validate_identifier(&self.table, "table name")?;
+        let path = format!("{}/{}", crate::api::table::STATS_API_PATH, self.table);
         let mut params = Vec::new();
 
         // Build the query string from conditions.
-        let query = encode_query(&self.conditions, &self.order_by);
+        let query = encode_query(&self.conditions, &self.order_by)?;
         if !query.is_empty() {
             params.push(("sysparm_query".to_string(), query));
         }
@@ -408,7 +408,12 @@ impl TableApi {
     pub async fn get(self, sys_id: &str) -> Result<Record> {
         validate_identifier(&self.table, "table name")?;
         validate_identifier(sys_id, "sys_id")?;
-        let path = format!("/api/now/table/{}/{}", self.table, sys_id);
+        let path = format!(
+            "{}/{}/{}",
+            crate::api::table::TABLE_API_PATH,
+            self.table,
+            sys_id
+        );
         let mut params = Vec::new();
 
         if let Some(ref fields) = self.fields {
@@ -445,7 +450,7 @@ impl TableApi {
     /// Create a new record.
     pub async fn create(self, data: Value) -> Result<Record> {
         validate_identifier(&self.table, "table name")?;
-        let path = format!("/api/now/table/{}", self.table);
+        let path = format!("{}/{}", crate::api::table::TABLE_API_PATH, self.table);
         let mut params = Vec::new();
         params.push((
             "sysparm_display_value".to_string(),
@@ -461,7 +466,10 @@ impl TableApi {
             ));
         }
 
-        let response = self.transport.post_with_params(&path, &params, data).await?;
+        let response = self
+            .transport
+            .post_with_params(&path, &params, data)
+            .await?;
 
         Record::from_json(&self.table, &response.result, self.display_value).ok_or_else(|| {
             Error::Api {
@@ -476,8 +484,30 @@ impl TableApi {
     pub async fn update(self, sys_id: &str, data: Value) -> Result<Record> {
         validate_identifier(&self.table, "table name")?;
         validate_identifier(sys_id, "sys_id")?;
-        let path = format!("/api/now/table/{}/{}", self.table, sys_id);
-        let response = self.transport.patch(&path, data).await?;
+        let path = format!(
+            "{}/{}/{}",
+            crate::api::table::TABLE_API_PATH,
+            self.table,
+            sys_id
+        );
+        let mut params = Vec::new();
+        params.push((
+            "sysparm_display_value".to_string(),
+            self.display_value.as_param().to_string(),
+        ));
+        if let Some(ref fields) = self.fields {
+            params.push(("sysparm_fields".to_string(), fields.join(",")));
+        }
+        if self.exclude_reference_link {
+            params.push((
+                "sysparm_exclude_reference_link".to_string(),
+                "true".to_string(),
+            ));
+        }
+        let response = self
+            .transport
+            .patch_with_params(&path, &params, data)
+            .await?;
 
         Record::from_json(&self.table, &response.result, self.display_value).ok_or_else(|| {
             Error::Api {
@@ -492,7 +522,12 @@ impl TableApi {
     pub async fn delete(self, sys_id: &str) -> Result<()> {
         validate_identifier(&self.table, "table name")?;
         validate_identifier(sys_id, "sys_id")?;
-        let path = format!("/api/now/table/{}/{}", self.table, sys_id);
+        let path = format!(
+            "{}/{}/{}",
+            crate::api::table::TABLE_API_PATH,
+            self.table,
+            sys_id
+        );
         self.transport.delete(&path).await?;
         Ok(())
     }
@@ -500,8 +535,8 @@ impl TableApi {
     // ── Internal helpers ────────────────────────────────────────────
 
     /// Build the query parameters for a GET request.
-    fn build_params(&self) -> Vec<(String, String)> {
-        let mut params = self.build_params_without_pagination();
+    fn build_params(&self) -> Result<Vec<(String, String)>> {
+        let mut params = self.build_params_without_pagination()?;
 
         // Pagination.
         if let Some(limit) = self.limit {
@@ -511,16 +546,16 @@ impl TableApi {
             params.push(("sysparm_offset".to_string(), offset.to_string()));
         }
 
-        params
+        Ok(params)
     }
 
     /// Build query params without pagination (for use by the Paginator,
     /// which manages its own limit/offset).
-    fn build_params_without_pagination(&self) -> Vec<(String, String)> {
+    fn build_params_without_pagination(&self) -> Result<Vec<(String, String)>> {
         let mut params = Vec::new();
 
         // Encoded query.
-        let query = encode_query(&self.conditions, &self.order_by);
+        let query = encode_query(&self.conditions, &self.order_by)?;
         if !query.is_empty() {
             params.push(("sysparm_query".to_string(), query));
         }
@@ -573,7 +608,7 @@ impl TableApi {
             params.push(("sysparm_no_count".to_string(), "true".to_string()));
         }
 
-        params
+        Ok(params)
     }
 
     /// Fetch related records based on the `include_related` configuration.
@@ -629,9 +664,11 @@ impl TableApi {
                 .await
             }
             FetchStrategy::DotWalk => {
-                // Dot-walking is handled at query time by adding dotted fields.
-                // For now, fall back to concurrent.
-                debug!("dot-walk strategy not yet implemented, falling back to concurrent");
+                // DotWalk adds dot-walked field names at query build time
+                // (see build_params_without_pagination) but still needs concurrent
+                // fetches for full related-record objects. The dot-walked fields
+                // provide inline data; concurrent fetches populate the related() API.
+                debug!("DotWalk strategy: dot-walked fields added at query time, fetching full related records concurrently");
                 batch::fetch_related_concurrent(
                     &self.transport,
                     &self.table,
@@ -647,4 +684,3 @@ impl TableApi {
         errors
     }
 }
-

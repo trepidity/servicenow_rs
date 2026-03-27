@@ -59,11 +59,7 @@ impl HttpTransport {
     }
 
     /// Perform a GET request with query parameters.
-    pub async fn get(
-        &self,
-        path: &str,
-        params: &[(String, String)],
-    ) -> Result<ServiceNowResponse> {
+    pub async fn get(&self, path: &str, params: &[(String, String)]) -> Result<ServiceNowResponse> {
         self.request(Method::Get, path, params, None).await
     }
 
@@ -92,6 +88,16 @@ impl HttpTransport {
         self.request(Method::Patch, path, &[], Some(body)).await
     }
 
+    /// Perform a PATCH request with query parameters and a JSON body.
+    pub async fn patch_with_params(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        body: Value,
+    ) -> Result<ServiceNowResponse> {
+        self.request(Method::Patch, path, params, Some(body)).await
+    }
+
     /// Perform a DELETE request.
     pub async fn delete(&self, path: &str) -> Result<ServiceNowResponse> {
         self.request(Method::Delete, path, &[], None).await
@@ -107,6 +113,7 @@ impl HttpTransport {
     ) -> Result<ServiceNowResponse> {
         let url = self.url(path)?;
         let mut last_error: Option<Error> = None;
+        let mut auth_refreshed = false;
 
         for attempt in 0..=self.retry_config.max_retries {
             // Rate limiting.
@@ -155,12 +162,13 @@ impl HttpTransport {
                 Ok(resp) => {
                     let status = resp.status().as_u16();
 
-                    // If auth failed and we can refresh, try that.
-                    if status == 401 && attempt < self.retry_config.max_retries {
+                    // If auth failed and we haven't tried refreshing yet, try once.
+                    if status == 401 && !auth_refreshed && attempt < self.retry_config.max_retries {
                         if let Err(e) = self.authenticator.refresh().await {
                             debug!("auth refresh failed: {}", e);
                         } else {
                             debug!("auth refreshed, retrying");
+                            auth_refreshed = true;
                             continue;
                         }
                     }
@@ -169,12 +177,7 @@ impl HttpTransport {
                         Ok(parsed) => return Ok(parsed),
                         Err(Error::RateLimited { retry_after }) => {
                             if attempt < self.retry_config.max_retries {
-                                retry::retry_delay(
-                                    &self.retry_config,
-                                    attempt,
-                                    retry_after,
-                                )
-                                .await;
+                                retry::retry_delay(&self.retry_config, attempt, retry_after).await;
                                 last_error = Some(Error::RateLimited { retry_after });
                                 continue;
                             }

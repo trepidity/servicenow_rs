@@ -1,5 +1,5 @@
 // The Table API functionality is implemented directly in `query::builder::TableApi`.
-// Constants and helpers for the Table API live here.
+// Constants for the Table API and Stats API paths.
 
 /// Base path for the ServiceNow Table API.
 pub const TABLE_API_PATH: &str = "/api/now/table";

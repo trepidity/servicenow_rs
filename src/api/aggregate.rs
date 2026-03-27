@@ -5,7 +5,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::error::{Error, Result};
-use crate::query::filter::{Condition, Filter, Joiner, Operator, Order, encode_query};
+use crate::query::filter::{encode_query, Condition, Filter, Joiner, Operator, Order};
 use crate::transport::http::HttpTransport;
 
 /// Builder for constructing ServiceNow Aggregate/Stats API queries.
@@ -152,8 +152,9 @@ impl AggregateApi {
 
     /// Execute the aggregate query.
     pub async fn execute(self) -> Result<AggregateResult> {
-        let path = format!("/api/now/stats/{}", self.table);
-        let params = self.build_params();
+        crate::query::builder::validate_identifier(&self.table, "table name")?;
+        let path = format!("{}/{}", crate::api::table::STATS_API_PATH, self.table);
+        let params = self.build_params()?;
 
         debug!(
             table = self.table,
@@ -167,11 +168,11 @@ impl AggregateApi {
     }
 
     /// Build query parameters.
-    fn build_params(&self) -> Vec<(String, String)> {
+    fn build_params(&self) -> Result<Vec<(String, String)>> {
         let mut params = Vec::new();
 
         // Encoded query.
-        let query = encode_query(&self.conditions, &self.order_by);
+        let query = encode_query(&self.conditions, &self.order_by)?;
         if !query.is_empty() {
             params.push(("sysparm_query".to_string(), query));
         }
@@ -183,34 +184,22 @@ impl AggregateApi {
 
         // Avg fields.
         if !self.avg_fields.is_empty() {
-            params.push((
-                "sysparm_avg_fields".to_string(),
-                self.avg_fields.join(","),
-            ));
+            params.push(("sysparm_avg_fields".to_string(), self.avg_fields.join(",")));
         }
 
         // Sum fields.
         if !self.sum_fields.is_empty() {
-            params.push((
-                "sysparm_sum_fields".to_string(),
-                self.sum_fields.join(","),
-            ));
+            params.push(("sysparm_sum_fields".to_string(), self.sum_fields.join(",")));
         }
 
         // Min fields.
         if !self.min_fields.is_empty() {
-            params.push((
-                "sysparm_min_fields".to_string(),
-                self.min_fields.join(","),
-            ));
+            params.push(("sysparm_min_fields".to_string(), self.min_fields.join(",")));
         }
 
         // Max fields.
         if !self.max_fields.is_empty() {
-            params.push((
-                "sysparm_max_fields".to_string(),
-                self.max_fields.join(","),
-            ));
+            params.push(("sysparm_max_fields".to_string(), self.max_fields.join(",")));
         }
 
         // Group by.
@@ -228,13 +217,10 @@ impl AggregateApi {
 
         // Display value for group-by fields.
         if self.display_value {
-            params.push((
-                "sysparm_display_value".to_string(),
-                "true".to_string(),
-            ));
+            params.push(("sysparm_display_value".to_string(), "true".to_string()));
         }
 
-        params
+        Ok(params)
     }
 }
 

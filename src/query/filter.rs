@@ -75,8 +75,25 @@ pub struct Condition {
     pub filter: Filter,
 }
 
+/// Validate that a field name contains only safe characters.
+///
+/// Allows alphanumeric, underscores, hyphens, and dots (for dot-walking).
+/// Rejects characters that could break the encoded query syntax (^, =, etc.).
+fn validate_field_name(field: &str) -> bool {
+    !field.is_empty()
+        && field
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+}
+
 /// Builds a ServiceNow encoded query string from a list of conditions and ordering.
-pub fn encode_query(conditions: &[Condition], order_by: &[(String, Order)]) -> String {
+///
+/// Returns an error if any field name contains characters that could break
+/// the encoded query syntax.
+pub fn encode_query(
+    conditions: &[Condition],
+    order_by: &[(String, Order)],
+) -> crate::error::Result<String> {
     let mut parts = Vec::new();
 
     for (i, cond) in conditions.iter().enumerate() {
@@ -89,6 +106,12 @@ pub fn encode_query(conditions: &[Condition], order_by: &[(String, Order)]) -> S
         }
 
         let f = &cond.filter;
+        if !validate_field_name(&f.field) {
+            return Err(crate::error::Error::Query(format!(
+                "invalid field name: '{}' — only alphanumeric, underscore, hyphen, and dot allowed",
+                f.field
+            )));
+        }
         match f.operator {
             Operator::IsEmpty | Operator::IsNotEmpty => {
                 parts.push(format!("{}{}", f.field, f.operator.as_encoded()));
@@ -107,13 +130,19 @@ pub fn encode_query(conditions: &[Condition], order_by: &[(String, Order)]) -> S
     }
 
     for (field, order) in order_by {
+        if !validate_field_name(field) {
+            return Err(crate::error::Error::Query(format!(
+                "invalid order-by field name: '{}' — only alphanumeric, underscore, hyphen, and dot allowed",
+                field
+            )));
+        }
         match order {
             Order::Asc => parts.push(format!("^ORDERBY{}", field)),
             Order::Desc => parts.push(format!("^ORDERBYDESC{}", field)),
         }
     }
 
-    parts.join("")
+    Ok(parts.join(""))
 }
 
 #[cfg(test)]
@@ -130,7 +159,7 @@ mod tests {
                 value: "1".to_string(),
             },
         }];
-        assert_eq!(encode_query(&conditions, &[]), "state=1");
+        assert_eq!(encode_query(&conditions, &[]).unwrap(), "state=1");
     }
 
     #[test]
@@ -153,7 +182,10 @@ mod tests {
                 },
             },
         ];
-        assert_eq!(encode_query(&conditions, &[]), "state=1^priority<3");
+        assert_eq!(
+            encode_query(&conditions, &[]).unwrap(),
+            "state=1^priority<3"
+        );
     }
 
     #[test]
@@ -176,7 +208,7 @@ mod tests {
                 },
             },
         ];
-        assert_eq!(encode_query(&conditions, &[]), "state=1^ORstate=2");
+        assert_eq!(encode_query(&conditions, &[]).unwrap(), "state=1^ORstate=2");
     }
 
     #[test]
@@ -191,7 +223,7 @@ mod tests {
         }];
         let order = vec![("sys_created_on".to_string(), Order::Desc)];
         assert_eq!(
-            encode_query(&conditions, &order),
+            encode_query(&conditions, &order).unwrap(),
             "active=true^ORDERBYDESCsys_created_on"
         );
     }
@@ -206,7 +238,10 @@ mod tests {
                 value: String::new(),
             },
         }];
-        assert_eq!(encode_query(&conditions, &[]), "assigned_toISEMPTY");
+        assert_eq!(
+            encode_query(&conditions, &[]).unwrap(),
+            "assigned_toISEMPTY"
+        );
     }
 
     #[test]
@@ -220,7 +255,7 @@ mod tests {
             },
         }];
         assert_eq!(
-            encode_query(&conditions, &[]),
+            encode_query(&conditions, &[]).unwrap(),
             "short_descriptionLIKEnetwork"
         );
     }

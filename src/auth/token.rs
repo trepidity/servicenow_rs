@@ -67,9 +67,7 @@ impl TokenAuth {
     /// Create from the `SERVICENOW_API_TOKEN` environment variable.
     pub fn from_env() -> Result<Self> {
         let token = std::env::var("SERVICENOW_API_TOKEN").map_err(|_| {
-            crate::error::Error::Config(
-                "SERVICENOW_API_TOKEN environment variable not set".into(),
-            )
+            crate::error::Error::Config("SERVICENOW_API_TOKEN environment variable not set".into())
         })?;
         Ok(Self::bearer(token))
     }

@@ -45,7 +45,9 @@ impl PrefixRegistry {
     ///
     /// The prefix is matched case-insensitively.
     pub fn table_for_prefix(&self, prefix: &str) -> Option<&str> {
-        self.mappings.get(&prefix.to_uppercase()).map(|s| s.as_str())
+        self.mappings
+            .get(&prefix.to_uppercase())
+            .map(|s| s.as_str())
     }
 
     /// Extract the prefix from a record number and resolve the table name.
@@ -92,7 +94,7 @@ impl Default for PrefixRegistry {
         registry.register("RITM", "sc_req_item");
         registry.register("REQ", "sc_request");
         registry.register("SCTASK", "sc_task");
-        registry.register("TASK", "sc_task");
+        registry.register("TASK", "task");
         // Knowledge.
         registry.register("KB", "kb_knowledge");
         // Project / Agile.
@@ -116,7 +118,10 @@ fn extract_prefix(number: &str) -> Option<String> {
         return None;
     }
 
-    let prefix: String = number.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let prefix: String = number
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
     if prefix.is_empty() {
         return None;
     }
@@ -183,10 +188,7 @@ mod tests {
         let mut reg = PrefixRegistry::default();
         reg.register("MYPREFIX", "u_custom_table");
         assert_eq!(reg.table_for_prefix("MYPREFIX"), Some("u_custom_table"));
-        assert_eq!(
-            reg.table_for_number("MYPREFIX0001"),
-            Some("u_custom_table")
-        );
+        assert_eq!(reg.table_for_number("MYPREFIX0001"), Some("u_custom_table"));
         // Original mappings still work.
         assert_eq!(reg.table_for_prefix("INC"), Some("incident"));
     }

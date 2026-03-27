@@ -21,7 +21,7 @@ use crate::transport::http::HttpTransport;
 /// let mut paginator = client.table("incident")
 ///     .equals("state", "1")
 ///     .limit(100)
-///     .paginate();
+///     .paginate()?;
 ///
 /// while let Some(page) = paginator.next_page().await? {
 ///     println!("Got {} records (total: {:?})", page.len(), paginator.total_count());
@@ -53,7 +53,7 @@ impl Paginator {
         page_size: u32,
         display_value: DisplayValue,
     ) -> Self {
-        let path = format!("/api/now/table/{}", table);
+        let path = format!("{}/{}", crate::api::table::TABLE_API_PATH, table);
         Self {
             transport,
             path,
@@ -76,7 +76,10 @@ impl Paginator {
         // Build params for this page.
         let mut params = self.base_params.clone();
         params.push(("sysparm_limit".to_string(), self.page_size.to_string()));
-        params.push(("sysparm_offset".to_string(), self.current_offset.to_string()));
+        params.push((
+            "sysparm_offset".to_string(),
+            self.current_offset.to_string(),
+        ));
 
         debug!(
             table = self.table,
@@ -160,23 +163,5 @@ impl Paginator {
             total_count: self.total_count,
             errors: all_errors,
         })
-    }
-}
-
-/// Configuration for auto-pagination behavior.
-#[derive(Debug, Clone)]
-pub struct PaginationConfig {
-    /// Page size for each request.
-    pub page_size: u32,
-    /// Maximum total records to fetch (safety limit). None = no limit.
-    pub max_records: Option<u64>,
-}
-
-impl Default for PaginationConfig {
-    fn default() -> Self {
-        Self {
-            page_size: 100,
-            max_records: Some(10_000),
-        }
     }
 }

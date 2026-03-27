@@ -162,10 +162,7 @@ pub async fn parse_response(response: reqwest::Response) -> Result<ServiceNowRes
     }
 
     // Extract "result" field.
-    let result = json
-        .get("result")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let result = json.get("result").cloned().unwrap_or(Value::Null);
 
     Ok(ServiceNowResponse {
         status,

@@ -29,8 +29,8 @@ impl Default for RetryConfig {
 impl RetryConfig {
     /// Calculate the delay for a given attempt number (0-indexed).
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let delay_ms = self.initial_delay.as_millis() as f64
-            * self.backoff_factor.powi(attempt as i32);
+        let delay_ms =
+            self.initial_delay.as_millis() as f64 * self.backoff_factor.powi(attempt as i32);
         let delay = Duration::from_millis(delay_ms as u64);
         delay.min(self.max_delay)
     }
@@ -101,10 +101,7 @@ impl RateLimiter {
                 }
             }
             // Wait a fraction of the refill interval.
-            tokio::time::sleep(Duration::from_millis(
-                (1000.0 / self.max_per_second) as u64,
-            ))
-            .await;
+            tokio::time::sleep(Duration::from_millis((1000.0 / self.max_per_second) as u64)).await;
         }
     }
 }

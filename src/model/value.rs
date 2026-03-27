@@ -93,16 +93,17 @@ pub fn parse_field_value(json: serde_json::Value, mode: DisplayValue) -> FieldVa
                     .get("display_value")
                     .and_then(|v| v.as_str())
                     .map(String::from),
-                link: obj
-                    .get("link")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
+                link: obj.get("link").and_then(|v| v.as_str()).map(String::from),
             }
         }
         _ => match mode {
             DisplayValue::Display => FieldValue {
                 value: None,
-                display_value: Some(json.as_str().unwrap_or_default().to_string()),
+                display_value: Some(match json {
+                    serde_json::Value::String(ref s) => s.clone(),
+                    serde_json::Value::Null => String::new(),
+                    ref other => other.to_string(),
+                }),
                 link: None,
             },
             _ => FieldValue::from_raw(json),

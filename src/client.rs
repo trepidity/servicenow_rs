@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::model::record::Record;
 use crate::model::value::DisplayValue;
 use crate::prefix::PrefixRegistry;
-use crate::query::builder::TableApi;
+use crate::query::builder::{validate_identifier, TableApi};
 use crate::query::filter::Order;
 use crate::schema::registry::SchemaRegistry;
 use crate::transport::http::HttpTransport;
@@ -68,7 +68,11 @@ impl ServiceNowClient {
     ///
     /// Falls back to environment variables if the file doesn't exist.
     pub async fn from_config() -> Result<Self> {
-        Self::builder().from_default_config().from_env().build().await
+        Self::builder()
+            .from_default_config()
+            .from_env()
+            .build()
+            .await
     }
 
     /// Create a client from a specific config file path.
@@ -316,45 +320,54 @@ impl ServiceNowClient {
 
     /// Generate a URL that opens a record in the ServiceNow browser UI by number.
     ///
+    /// Returns an error if `table` or `number` contain invalid characters.
+    ///
     /// ```
     /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
-    /// let url = client.browser_url("incident", "INC0012345");
+    /// let url = client.browser_url("incident", "INC0012345").unwrap();
     /// // "https://instance.service-now.com/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345"
     /// # }
     /// ```
-    pub fn browser_url(&self, table: &str, number: &str) -> String {
-        format!(
+    pub fn browser_url(&self, table: &str, number: &str) -> Result<String> {
+        validate_identifier(table, "table name")?;
+        validate_identifier(number, "record number")?;
+        Ok(format!(
             "{}/nav_to.do?uri={}.do?sysparm_query=number={}",
             self.base_url, table, number
-        )
+        ))
     }
 
     /// Generate a URL that opens a record in the ServiceNow browser UI by sys_id.
     ///
+    /// Returns an error if `table` or `sys_id` contain invalid characters.
+    ///
     /// ```
     /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
-    /// let url = client.browser_url_by_id("incident", "abc123def456");
+    /// let url = client.browser_url_by_id("incident", "abc123def456").unwrap();
     /// // "https://instance.service-now.com/nav_to.do?uri=incident.do?sys_id=abc123def456"
     /// # }
     /// ```
-    pub fn browser_url_by_id(&self, table: &str, sys_id: &str) -> String {
-        format!(
+    pub fn browser_url_by_id(&self, table: &str, sys_id: &str) -> Result<String> {
+        validate_identifier(table, "table name")?;
+        validate_identifier(sys_id, "sys_id")?;
+        Ok(format!(
             "{}/nav_to.do?uri={}.do?sys_id={}",
             self.base_url, table, sys_id
-        )
+        ))
     }
 
     /// Generate a browser URL from a record number, resolving the table from the prefix.
     ///
-    /// Returns `None` if the prefix cannot be resolved.
+    /// Returns `None` if the prefix cannot be resolved, or an error if inputs
+    /// contain invalid characters.
     ///
     /// ```
     /// # fn example(client: &servicenow_rs::client::ServiceNowClient) {
     /// let url = client.browser_url_for_number("INC0012345");
-    /// // Some("https://instance.service-now.com/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345")
+    /// // Some(Ok("https://instance.service-now.com/nav_to.do?uri=incident.do?sysparm_query=number=INC0012345"))
     /// # }
     /// ```
-    pub fn browser_url_for_number(&self, number: &str) -> Option<String> {
+    pub fn browser_url_for_number(&self, number: &str) -> Option<Result<String>> {
         let table = self.prefix_registry.table_for_number(number)?;
         Some(self.browser_url(table, number))
     }
@@ -526,9 +539,7 @@ impl ClientBuilder {
             .unwrap_or(Duration::from_secs(30));
 
         let retry_config = RetryConfig {
-            max_retries: max_retries
-                .or(config.transport.max_retries)
-                .unwrap_or(3),
+            max_retries: max_retries.or(config.transport.max_retries).unwrap_or(3),
             ..RetryConfig::default()
         };
 
@@ -558,7 +569,6 @@ impl ClientBuilder {
             base_url: base_url_str,
         })
     }
-
 }
 
 /// Resolve authentication from config when no explicit auth override is set.
@@ -608,13 +618,12 @@ fn resolve_schema(
 ) -> Result<Option<SchemaRegistry>> {
     let release = schema_release.or(config.schema.release.as_deref());
 
-    let overlay_path = schema_overlay_path
-        .or(config.schema.overlay.as_deref().map(Path::new));
+    let overlay_path = schema_overlay_path.or(config.schema.overlay.as_deref().map(Path::new));
 
     match (release, overlay_path) {
-        (Some(release), Some(overlay)) => Ok(Some(
-            SchemaRegistry::from_release_with_overlay(release, overlay)?,
-        )),
+        (Some(release), Some(overlay)) => Ok(Some(SchemaRegistry::from_release_with_overlay(
+            release, overlay,
+        )?)),
         (Some(release), None) => Ok(Some(SchemaRegistry::from_release(release)?)),
         (None, _) => Ok(None),
     }

@@ -46,7 +46,7 @@ async fn test_live_simple_query() {
         .expect("query failed");
 
     assert!(result.len() <= 3);
-    assert!(result.len() > 0, "expected at least 1 incident");
+    assert!(!result.is_empty(), "expected at least 1 incident");
     for record in &result {
         assert!(record.get_str("number").is_some(), "missing number field");
     }
@@ -106,7 +106,9 @@ async fn test_live_deep_dot_walk() {
     for record in &result {
         let num = record.get_display("number").unwrap_or("?");
         let caller = record.get_str("caller_id.name").unwrap_or("(empty)");
-        let mgr = record.get_str("caller_id.manager.name").unwrap_or("(empty)");
+        let mgr = record
+            .get_str("caller_id.manager.name")
+            .unwrap_or("(empty)");
         println!("{}: caller={}, manager={}", num, caller, mgr);
     }
 }
@@ -159,7 +161,8 @@ async fn test_live_pagination() {
         .fields(&["number"])
         .equals("state", "1")
         .limit(5) // page size of 5
-        .paginate();
+        .paginate()
+        .expect("paginate failed");
 
     let mut total_records = 0;
     let mut pages = 0;
@@ -180,10 +183,7 @@ async fn test_live_pagination() {
     }
 
     assert!(pages > 0, "expected at least 1 page");
-    println!(
-        "Fetched {} records across {} pages",
-        total_records, pages
-    );
+    println!("Fetched {} records across {} pages", total_records, pages);
 }
 
 #[tokio::test]
@@ -231,10 +231,7 @@ async fn test_live_related_records() {
         let tasks = record.related("change_task");
         println!("{}: {} change tasks", num, tasks.len());
         for task in tasks.iter().take(3) {
-            println!(
-                "  - {}",
-                task.get_str("number").unwrap_or("?")
-            );
+            println!("  - {}", task.get_str("number").unwrap_or("?"));
         }
     }
 }
@@ -543,10 +540,7 @@ async fn test_live_prefix_resolution() {
     let client = live_client().await;
 
     assert_eq!(client.table_for_number("INC0012345"), Some("incident"));
-    assert_eq!(
-        client.table_for_number("RITM2513403"),
-        Some("sc_req_item")
-    );
+    assert_eq!(client.table_for_number("RITM2513403"), Some("sc_req_item"));
     assert_eq!(client.table_for_number("UNKNOWN001"), None);
 }
 
@@ -608,18 +602,18 @@ async fn test_live_browser_url() {
     }
     let client = live_client().await;
 
-    let url = client.browser_url("incident", "INC0012345");
+    let url = client.browser_url("incident", "INC0012345").unwrap();
     assert!(url.contains("nav_to.do"));
     assert!(url.contains("incident.do"));
     assert!(url.contains("INC0012345"));
     println!("Browser URL: {}", url);
 
-    let url_by_id = client.browser_url_by_id("incident", "abc123");
+    let url_by_id = client.browser_url_by_id("incident", "abc123").unwrap();
     assert!(url_by_id.contains("sys_id=abc123"));
 
     let url_for_number = client.browser_url_for_number("CHG0307336");
     assert!(url_for_number.is_some());
-    let url_for_number = url_for_number.unwrap();
+    let url_for_number = url_for_number.unwrap().unwrap();
     assert!(url_for_number.contains("change_request.do"));
     println!("Browser URL for CHG: {}", url_for_number);
 }

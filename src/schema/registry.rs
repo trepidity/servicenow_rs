@@ -2,9 +2,7 @@ use std::path::Path;
 
 use crate::error::Result;
 
-use super::definition::{
-    FieldDef, RelationshipDef, SchemaDefinition, SchemaOverlay, TableDef,
-};
+use super::definition::{FieldDef, RelationshipDef, SchemaDefinition, SchemaOverlay, TableDef};
 use super::loader;
 
 /// Runtime registry for looking up table and relationship definitions.
@@ -133,8 +131,7 @@ impl SchemaRegistry {
 
     /// Get the parent table (via "extends") for a given table, if any.
     pub fn parent_table(&self, table: &str) -> Option<&str> {
-        self.table(table)
-            .and_then(|t| t.extends.as_deref())
+        self.table(table).and_then(|t| t.extends.as_deref())
     }
 
     /// Get all writable fields for a table (including inherited).
@@ -264,7 +261,7 @@ mod tests {
         let sys_id = registry.field("incident", "sys_id").unwrap();
         assert!(sys_id.read_only);
         assert!(!sys_id.is_journal());
-        assert!(sys_id.is_writable() == false);
+        assert!(!sys_id.is_writable());
 
         // work_notes is journal + write-only (inherited from task).
         let wn = registry.field("incident", "work_notes").unwrap();

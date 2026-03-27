@@ -25,7 +25,7 @@ pub struct InstanceConfig {
 }
 
 /// Authentication settings.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 pub struct AuthConfig {
     /// Auth method: "basic", "oauth", "token".
     pub method: Option<String>,
@@ -39,11 +39,35 @@ pub struct AuthConfig {
     pub token: Option<String>,
 }
 
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("method", &self.method)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("oauth", &self.oauth)
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
 /// OAuth-specific configuration.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 pub struct OAuthConfig {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
+}
+
+impl std::fmt::Debug for OAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthConfig")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 /// Schema configuration from file.
@@ -138,6 +162,9 @@ pub fn normalize_instance_url(input: &str) -> Result<String> {
     }
 
     let with_scheme = if input.starts_with("http://") || input.starts_with("https://") {
+        // Preserve the scheme as-is. HTTPS enforcement happens at build time
+        // in ClientBuilder::build(), which rejects http:// unless allow_http()
+        // is explicitly set (for testing with local mock servers).
         input.to_string()
     } else if !input.contains('.') {
         // Bare instance name — add scheme and domain.
@@ -148,9 +175,8 @@ pub fn normalize_instance_url(input: &str) -> Result<String> {
     };
 
     // Validate and normalize.
-    let url = url::Url::parse(&with_scheme).map_err(|e| {
-        Error::Config(format!("invalid instance URL '{}': {}", input, e))
-    })?;
+    let url = url::Url::parse(&with_scheme)
+        .map_err(|e| Error::Config(format!("invalid instance URL '{}': {}", input, e)))?;
 
     // Strip trailing slash.
     let mut result = url.to_string();
