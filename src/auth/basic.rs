@@ -11,13 +11,24 @@ use super::Authenticator;
 ///
 /// Encodes username:password as Base64 and sets the Authorization header.
 /// Supports session cookie reuse to avoid re-authenticating every request.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BasicAuth {
     username: String,
     #[allow(dead_code)]
     password: String,
     encoded: String,
     use_session: bool,
+}
+
+impl std::fmt::Debug for BasicAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BasicAuth")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("encoded", &"[REDACTED]")
+            .field("use_session", &self.use_session)
+            .finish()
+    }
 }
 
 impl BasicAuth {

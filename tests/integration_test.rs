@@ -10,6 +10,7 @@ async fn test_client(server: &MockServer) -> ServiceNowClient {
         .instance(server.uri())
         .auth(BasicAuth::new("test_user", "test_pass"))
         .schema_release("xanadu")
+        .allow_http() // wiremock uses http://
         .build()
         .await
         .expect("failed to build test client")
@@ -409,20 +410,23 @@ async fn test_complex_query_encoding() {
     assert_eq!(result.len(), 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_client_from_env() {
-    // Set env vars for the test.
-    std::env::set_var("SERVICENOW_INSTANCE", "testinstance");
-    std::env::set_var("SERVICENOW_USERNAME", "env_user");
-    std::env::set_var("SERVICENOW_PASSWORD", "env_pass");
+    // SAFETY: current_thread runtime avoids data race on env vars.
+    unsafe {
+        std::env::set_var("SERVICENOW_INSTANCE", "testinstance");
+        std::env::set_var("SERVICENOW_USERNAME", "env_user");
+        std::env::set_var("SERVICENOW_PASSWORD", "env_pass");
+    }
 
     let client = ServiceNowClient::from_env().await;
     assert!(client.is_ok());
 
-    // Clean up.
-    std::env::remove_var("SERVICENOW_INSTANCE");
-    std::env::remove_var("SERVICENOW_USERNAME");
-    std::env::remove_var("SERVICENOW_PASSWORD");
+    unsafe {
+        std::env::remove_var("SERVICENOW_INSTANCE");
+        std::env::remove_var("SERVICENOW_USERNAME");
+        std::env::remove_var("SERVICENOW_PASSWORD");
+    }
 }
 
 #[tokio::test]
@@ -473,6 +477,7 @@ async fn test_no_schema_related_records() {
     let client = ServiceNowClient::builder()
         .instance(server.uri())
         .auth(BasicAuth::new("user", "pass"))
+        .allow_http()
         .build()
         .await
         .expect("build failed");
@@ -899,6 +904,7 @@ async fn test_token_auth() {
     let client = ServiceNowClient::builder()
         .instance(server.uri())
         .auth(TokenAuth::bearer("my-secret-token"))
+        .allow_http()
         .build()
         .await
         .expect("build with token auth failed");

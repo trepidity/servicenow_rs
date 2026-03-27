@@ -60,6 +60,23 @@ pub struct TableApi {
     no_count: bool,
 }
 
+/// Validate that a table name or sys_id contains only safe characters.
+fn validate_identifier(value: &str, kind: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(Error::Query(format!("{} cannot be empty", kind)));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(Error::Query(format!(
+            "invalid {}: '{}' — only alphanumeric, underscore, and hyphen allowed",
+            kind, value
+        )));
+    }
+    Ok(())
+}
+
 impl TableApi {
     /// Create a new TableApi. Typically called via `ServiceNowClient::table()`.
     pub(crate) fn new(
@@ -257,6 +274,7 @@ impl TableApi {
 
     /// Execute the query and return all matching records.
     pub async fn execute(self) -> Result<QueryResult> {
+        validate_identifier(&self.table, "table name")?;
         let path = format!("/api/now/table/{}", self.table);
         let params = self.build_params();
 
@@ -302,12 +320,13 @@ impl TableApi {
     /// # Safety limit
     ///
     /// Pass `max_records` to cap the total number of records fetched.
-    /// This prevents accidentally downloading entire large tables.
+    /// Defaults to 10,000 if `None` to prevent accidentally downloading
+    /// entire large tables. Pass `Some(u64::MAX)` to truly fetch everything.
     pub async fn execute_all(self, max_records: Option<u64>) -> Result<QueryResult> {
         let mut paginator = self.paginate();
         let mut all_records = Vec::new();
         let mut all_errors = Vec::new();
-        let max = max_records.unwrap_or(u64::MAX);
+        let max = max_records.unwrap_or(10_000);
 
         while let Some(page) = paginator.next_page().await? {
             all_errors.extend(page.errors);
@@ -387,6 +406,8 @@ impl TableApi {
 
     /// Get a single record by sys_id.
     pub async fn get(self, sys_id: &str) -> Result<Record> {
+        validate_identifier(&self.table, "table name")?;
+        validate_identifier(sys_id, "sys_id")?;
         let path = format!("/api/now/table/{}/{}", self.table, sys_id);
         let mut params = Vec::new();
 
@@ -423,6 +444,7 @@ impl TableApi {
 
     /// Create a new record.
     pub async fn create(self, data: Value) -> Result<Record> {
+        validate_identifier(&self.table, "table name")?;
         let path = format!("/api/now/table/{}", self.table);
         let mut params = Vec::new();
         params.push((
@@ -439,16 +461,7 @@ impl TableApi {
             ));
         }
 
-        // POST doesn't use query params for filtering, but does for display_value.
-        // We need to add them as query params on the URL.
-        let path_with_params = if params.is_empty() {
-            path
-        } else {
-            let qs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
-            format!("{}?{}", path, qs.join("&"))
-        };
-
-        let response = self.transport.post(&path_with_params, data).await?;
+        let response = self.transport.post_with_params(&path, &params, data).await?;
 
         Record::from_json(&self.table, &response.result, self.display_value).ok_or_else(|| {
             Error::Api {
@@ -461,6 +474,8 @@ impl TableApi {
 
     /// Update an existing record by sys_id.
     pub async fn update(self, sys_id: &str, data: Value) -> Result<Record> {
+        validate_identifier(&self.table, "table name")?;
+        validate_identifier(sys_id, "sys_id")?;
         let path = format!("/api/now/table/{}/{}", self.table, sys_id);
         let response = self.transport.patch(&path, data).await?;
 
@@ -475,6 +490,8 @@ impl TableApi {
 
     /// Delete a record by sys_id.
     pub async fn delete(self, sys_id: &str) -> Result<()> {
+        validate_identifier(&self.table, "table name")?;
+        validate_identifier(sys_id, "sys_id")?;
         let path = format!("/api/now/table/{}/{}", self.table, sys_id);
         self.transport.delete(&path).await?;
         Ok(())

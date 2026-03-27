@@ -280,12 +280,6 @@ impl AggregateResult {
     /// Get the average of a field (non-grouped).
     pub fn avg(&self, field: &str) -> Option<f64> {
         self.stat_value(&format!("avg.{}", field))
-            .or_else(|| {
-                self.stats
-                    .get("stats")
-                    .and_then(|s| s.get(&format!("avg.{}", field)))
-                    .map(|s| s.as_str())
-            })
             .and_then(|s| s.parse().ok())
     }
 

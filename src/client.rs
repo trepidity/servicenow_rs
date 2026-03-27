@@ -125,6 +125,7 @@ pub struct ClientBuilder {
     max_retries: Option<u32>,
     timeout: Option<Duration>,
     rate_limit: Option<u32>,
+    allow_http: bool,
 }
 
 impl ClientBuilder {
@@ -149,6 +150,15 @@ impl ClientBuilder {
     /// Set the path to a custom schema overlay file.
     pub fn schema_overlay(mut self, path: impl Into<PathBuf>) -> Self {
         self.schema_overlay_path = Some(path.into());
+        self
+    }
+
+    /// Allow HTTP (non-TLS) connections. **For testing only.**
+    ///
+    /// By default, the library enforces HTTPS. Call this to allow
+    /// `http://` URLs, e.g., for wiremock or local test servers.
+    pub fn allow_http(mut self) -> Self {
+        self.allow_http = true;
         self
     }
 
@@ -211,6 +221,7 @@ impl ClientBuilder {
             max_retries,
             timeout,
             rate_limit,
+            allow_http,
         } = self;
 
         // Resolve instance URL: builder override > config.
@@ -226,6 +237,15 @@ impl ClientBuilder {
 
         let base_url_str = config::normalize_instance_url(&instance_raw)?;
         let base_url = Url::parse(&base_url_str)?;
+
+        // Enforce HTTPS unless explicitly allowed for testing.
+        if base_url.scheme() == "http" && !allow_http {
+            return Err(Error::Config(
+                "HTTP URLs are not allowed. Use HTTPS for all ServiceNow connections. \
+                 Call .allow_http() on the builder for local testing."
+                    .into(),
+            ));
+        }
 
         // Resolve authenticator.
         let authenticator: Arc<dyn Authenticator> = if let Some(auth) = auth_override {

@@ -19,7 +19,9 @@ pub enum Joiner {
 pub enum Operator {
     Equals,
     NotEquals,
+    /// Contains / LIKE — fuzzy substring match.
     Contains,
+    /// Not contains / NOT LIKE.
     NotContains,
     StartsWith,
     EndsWith,
@@ -32,8 +34,6 @@ pub enum Operator {
     IsEmpty,
     IsNotEmpty,
     Between,
-    Like,
-    NotLike,
     InstanceOf,
 }
 
@@ -56,8 +56,6 @@ impl Operator {
             Operator::IsEmpty => "ISEMPTY",
             Operator::IsNotEmpty => "ISNOTEMPTY",
             Operator::Between => "BETWEEN",
-            Operator::Like => "LIKE",
-            Operator::NotLike => "NOT LIKE",
             Operator::InstanceOf => "INSTANCEOF",
         }
     }
@@ -96,11 +94,13 @@ pub fn encode_query(conditions: &[Condition], order_by: &[(String, Order)]) -> S
                 parts.push(format!("{}{}", f.field, f.operator.as_encoded()));
             }
             _ => {
+                // Escape ^ in values to prevent query injection.
+                let escaped_value = f.value.replace('^', "\\^");
                 parts.push(format!(
                     "{}{}{}",
                     f.field,
                     f.operator.as_encoded(),
-                    f.value
+                    escaped_value
                 ));
             }
         }

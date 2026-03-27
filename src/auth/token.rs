@@ -25,11 +25,21 @@ use super::Authenticator;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TokenAuth {
     token: String,
     header_name: String,
     header_prefix: Option<String>,
+}
+
+impl std::fmt::Debug for TokenAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenAuth")
+            .field("token", &"[REDACTED]")
+            .field("header_name", &self.header_name)
+            .field("header_prefix", &self.header_prefix)
+            .finish()
+    }
 }
 
 impl TokenAuth {

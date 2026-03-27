@@ -72,6 +72,16 @@ impl HttpTransport {
         self.request(Method::Post, path, &[], Some(body)).await
     }
 
+    /// Perform a POST request with query parameters and a JSON body.
+    pub async fn post_with_params(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        body: Value,
+    ) -> Result<ServiceNowResponse> {
+        self.request(Method::Post, path, params, Some(body)).await
+    }
+
     /// Perform a PUT request with a JSON body.
     pub async fn put(&self, path: &str, body: Value) -> Result<ServiceNowResponse> {
         self.request(Method::Put, path, &[], Some(body)).await

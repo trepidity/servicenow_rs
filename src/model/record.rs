@@ -36,14 +36,22 @@ impl Record {
         let sys_id = obj
             .get("sys_id")
             .and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
+                Value::String(s) if !s.is_empty() => Some(s.clone()),
                 Value::Object(o) => o
                     .get("value")
                     .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
                     .map(String::from),
                 _ => None,
             })
             .unwrap_or_default();
+
+        if sys_id.is_empty() {
+            tracing::warn!(
+                table = table,
+                "record missing sys_id — relationship matching will not work"
+            );
+        }
 
         let mut fields = HashMap::new();
         for (key, value) in obj {

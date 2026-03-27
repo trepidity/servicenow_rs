@@ -14,16 +14,16 @@ fn should_run() -> bool {
 }
 
 async fn live_client() -> ServiceNowClient {
+    let instance = std::env::var("SERVICENOW_INSTANCE")
+        .expect("SERVICENOW_INSTANCE env var required for live tests");
+    let username = std::env::var("SERVICENOW_USERNAME")
+        .expect("SERVICENOW_USERNAME env var required for live tests");
+    let password = std::env::var("SERVICENOW_PASSWORD")
+        .expect("SERVICENOW_PASSWORD env var required for live tests");
+
     ServiceNowClient::builder()
-        .instance(
-            std::env::var("SERVICENOW_INSTANCE")
-                .unwrap_or_else(|_| "REDACTED_INSTANCE".to_string()),
-        )
-        .auth(BasicAuth::new(
-            std::env::var("SERVICENOW_USERNAME").unwrap_or_else(|_| "REDACTED_USER".to_string()),
-            std::env::var("SERVICENOW_PASSWORD")
-                .unwrap_or_else(|_| "REDACTED_PASSWORD".to_string()),
-        ))
+        .instance(instance)
+        .auth(BasicAuth::new(username, password))
         .schema_release("xanadu")
         .build()
         .await

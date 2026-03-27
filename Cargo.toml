@@ -24,7 +24,6 @@ tokio = { version = "1", features = ["full", "test-util"] }
 wiremock = "0.6"
 tempfile = "3"
 
-[features]
-default = ["table_api"]
-table_api = []
-codegen = []
+# Feature flags will be activated when the corresponding APIs are
+# gated behind conditional compilation (e.g., codegen, aggregate_api).
+# For now, all features are included by default.
