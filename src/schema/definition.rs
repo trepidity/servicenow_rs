@@ -147,6 +147,17 @@ pub enum FieldType {
     DocumentId,
     SysClassName,
     DomainId,
+    /// Duration fields (glide_duration, timer). Value is epoch-offset datetime
+    /// like "1970-01-05 11:00:11" representing a time span.
+    Duration,
+    /// JSON-typed fields storing structured data as a JSON string.
+    Json,
+    /// 64-bit integer fields (longint, auto_increment).
+    Long,
+    /// Choice fields with predefined values. Functionally a string with
+    /// a choices map, but semantically distinct.
+    Choice,
+    /// Catch-all for field types not explicitly modeled.
     Other,
 }
 

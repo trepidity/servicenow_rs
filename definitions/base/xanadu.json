@@ -6,7 +6,7 @@
       "fields": {
         "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
         "number": { "type": "string", "max_length": 40, "read_only": true, "label": "Number" },
-        "short_description": { "type": "string", "max_length": 160, "label": "Short description" },
+        "short_description": { "type": "string", "max_length": 160, "mandatory": true, "label": "Short description" },
         "description": { "type": "string", "max_length": 4000, "label": "Description" },
         "state": { "type": "integer", "label": "State" },
         "priority": { "type": "integer", "label": "Priority", "choices": { "1": "Critical", "2": "High", "3": "Moderate", "4": "Low", "5": "Planning" } },
@@ -41,17 +41,17 @@
         "service_offering": { "type": "reference", "reference_table": "service_offering", "label": "Service offering" },
         "business_service": { "type": "reference", "reference_table": "cmdb_ci_service", "label": "Business service" },
         "cmdb_ci": { "type": "reference", "reference_table": "cmdb_ci", "label": "Configuration item" },
-        "business_duration": { "type": "string", "label": "Business duration" },
-        "calendar_duration": { "type": "string", "label": "Calendar duration" },
+        "business_duration": { "type": "duration", "read_only": true, "label": "Business duration" },
+        "calendar_duration": { "type": "duration", "read_only": true, "label": "Calendar duration" },
         "sla_due": { "type": "date_time", "label": "SLA due" },
         "upon_approval": { "type": "string", "label": "Upon approval" },
         "upon_reject": { "type": "string", "label": "Upon reject" },
         "correlation_id": { "type": "string", "label": "Correlation ID" },
         "correlation_display": { "type": "string", "label": "Correlation display" },
-        "sys_domain": { "type": "reference", "reference_table": "sys_user_group", "label": "Domain" },
+        "sys_domain": { "type": "domain_id", "read_only": true, "label": "Domain" },
         "sys_class_name": { "type": "sys_class_name", "read_only": true, "label": "Class" },
         "sys_mod_count": { "type": "integer", "read_only": true, "label": "Updates" },
-        "time_worked": { "type": "string", "label": "Time worked" },
+        "time_worked": { "type": "duration", "label": "Time worked" },
         "work_start": { "type": "date_time", "label": "Actual start" },
         "work_end": { "type": "date_time", "label": "Actual end" },
         "additional_assignee_list": { "type": "glide_list", "label": "Additional assignee list" },
@@ -65,7 +65,13 @@
         "close_notes": { "type": "string", "max_length": 4000, "label": "Close notes" },
         "comments_and_work_notes": { "type": "journal", "read_only": true, "label": "Comments and work notes" },
         "task_effective_number": { "type": "string", "read_only": true, "label": "Task effective number" },
-        "universal_request": { "type": "reference", "reference_table": "sn_uni_request", "label": "Universal request" }
+        "universal_request": { "type": "reference", "reference_table": "sn_uni_request", "label": "Universal request" },
+        "calendar_stc": { "type": "long", "read_only": true, "label": "Calendar duration (seconds)" },
+        "business_stc": { "type": "long", "read_only": true, "label": "Business duration (seconds)" },
+        "sys_tags": { "type": "glide_list", "label": "Tags" },
+        "contract": { "type": "reference", "reference_table": "ast_contract", "label": "Contract" },
+        "user_input": { "type": "string", "label": "User input" },
+        "notify": { "type": "integer", "label": "Notify" }
       },
       "relationships": {}
     },
@@ -75,7 +81,7 @@
       "fields": {
         "category": { "type": "string", "label": "Category" },
         "subcategory": { "type": "string", "label": "Subcategory" },
-        "caller_id": { "type": "reference", "reference_table": "sys_user", "label": "Caller" },
+        "caller_id": { "type": "reference", "reference_table": "sys_user", "mandatory": true, "label": "Caller" },
         "resolved_by": { "type": "reference", "reference_table": "sys_user", "label": "Resolved by" },
         "resolved_at": { "type": "date_time", "label": "Resolved" },
         "reopen_count": { "type": "integer", "read_only": true, "label": "Reopen count" },
@@ -106,7 +112,7 @@
       "label": "Change Request",
       "extends": "task",
       "fields": {
-        "type": { "type": "string", "label": "Type", "choices": { "standard": "Standard", "normal": "Normal", "emergency": "Emergency" } },
+        "type": { "type": "string", "mandatory": true, "label": "Type", "choices": { "standard": "Standard", "normal": "Normal", "emergency": "Emergency" } },
         "risk": { "type": "integer", "label": "Risk", "choices": { "1": "High", "2": "Moderate", "3": "Low" } },
         "category": { "type": "string", "label": "Category" },
         "phase": { "type": "string", "label": "Phase" },
@@ -136,7 +142,15 @@
         "std_change_producer_version": { "type": "reference", "reference_table": "std_change_producer_version", "label": "Standard change template version" },
         "cab_delegate": { "type": "reference", "reference_table": "sys_user", "label": "CAB delegate" },
         "cab_recommendation": { "type": "string", "label": "CAB recommendation" },
-        "conflict_last_run": { "type": "date_time", "label": "Conflict last run" }
+        "conflict_last_run": { "type": "date_time", "label": "Conflict last run" },
+        "risk_impact_analysis": { "type": "html", "label": "Risk and impact analysis" },
+        "risk_value": { "type": "integer", "read_only": true, "label": "Risk value" },
+        "cab_date_time": { "type": "date_time", "label": "CAB date/time" },
+        "review_date": { "type": "date_time", "label": "Review date" },
+        "review_comments": { "type": "string", "label": "Review comments" },
+        "requested_by_date": { "type": "date_time", "label": "Requested by date" },
+        "on_hold_task": { "type": "reference", "reference_table": "task", "label": "On hold task" },
+        "copied_from": { "type": "reference", "reference_table": "change_request", "label": "Copied from" }
       },
       "relationships": {
         "change_task": {
