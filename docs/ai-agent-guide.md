@@ -216,6 +216,8 @@ for record in &changes {
 }
 ```
 
+`include_related()` also works with `DisplayValue::Display`; related fetches preserve the raw foreign-key value internally so parent/child matching still succeeds.
+
 ### 2.8 Paginate Through Results
 
 **Manual pagination:**
@@ -233,6 +235,8 @@ while let Some(page) = paginator.next_page().await? {
     }
 }
 ```
+
+Any `.offset(n)` set on the builder becomes the paginator's initial offset, and paginated queries continue to populate `include_related()` records page by page.
 
 **Auto-collect all pages:**
 
@@ -632,7 +636,7 @@ pub enum DisplayValue {
 ```rust
 pub enum FetchStrategy {
     Auto,       // Library picks (default)
-    DotWalk,    // Inline via dot-walking
+    DotWalk,    // Preserve explicit .dot_walk(); include_related still fetches concurrently
     Concurrent, // Parallel HTTP requests per relationship
 }
 ```

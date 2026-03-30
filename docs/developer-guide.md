@@ -86,7 +86,7 @@ ServiceNowClient::table("incident")
   -> QueryResult { records, total_count, errors }
 ```
 
-For pagination, `TableApi::paginate()` returns a `Paginator` that manages its own offset state and calls `HttpTransport::get()` for each page.
+For pagination, `TableApi::paginate()` returns a `Paginator` that manages its own offset state, preserves any builder `.offset()`, and calls `HttpTransport::get()` for each page. Paged queries also continue to resolve `include_related()` relationships on each page when a schema is loaded.
 
 ## Adding New Authentication Methods
 
@@ -608,7 +608,7 @@ The `TableApi` shorthand methods (`.equals()`, `.contains()`, etc.) push `Condit
 | `sysparm_exclude_reference_link` | `"true"` by default |
 | `sysparm_no_count` | `.no_count()` if called |
 
-When using `FetchStrategy::DotWalk` with `include_related`, the schema is used to automatically generate dot-walked field names from the related table's field definitions.
+`FetchStrategy::DotWalk` does not auto-generate `sysparm_fields` entries from schema relationship names. ServiceNow dot-walking only works through actual reference fields, so `.dot_walk()` remains explicit and `.include_related()` falls back to concurrent related-record fetches.
 
 ## Journal Field Internals
 
@@ -775,7 +775,7 @@ The `FetchStrategy` enum controls this behavior:
 
 - `Auto` (default) -- currently maps to `Concurrent`.
 - `Concurrent` -- fire parallel HTTP requests per relationship.
-- `DotWalk` -- intended to use ServiceNow dot-walking to inline related fields in a single request (currently falls back to `Concurrent`).
+- `DotWalk` -- preserves explicit `.dot_walk()` field requests, but `.include_related()` still uses concurrent related-record fetches because schema relationship names are not valid ServiceNow dot-walk paths.
 
 ### Relationship Filters
 
@@ -811,8 +811,8 @@ next_page():
 
 ### Entry Points
 
-- `TableApi::paginate()` -- returns a `Paginator`. The builder's `limit` becomes the page size (default 100).
-- `TableApi::execute_all(max_records)` -- creates a paginator internally and collects all pages, respecting the optional max.
+- `TableApi::paginate()` -- returns a `Paginator`. The builder's `limit` becomes the page size (default 100), and any builder `.offset()` becomes the initial page offset.
+- `TableApi::execute_all(max_records)` -- creates a paginator internally and collects all pages, respecting the optional max and preserving related-record traversal page by page.
 - `Paginator::collect_all()` -- collects remaining pages from an existing paginator.
 
 ### Total Count

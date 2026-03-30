@@ -202,6 +202,8 @@ assert!(result.has_errors());  // schema errors for missing relationship definit
 assert!(!result.is_empty());   // main records are still returned
 ```
 
+`include_related()` also works when using `DisplayValue::Display`; related fetches preserve raw foreign keys internally so records can still be matched back to their parent.
+
 ### Dot-Walking
 
 Dot-walking fetches fields from referenced records inline in a single HTTP request. This is more efficient than `include_related` when you only need a few fields from a reference:
@@ -248,6 +250,8 @@ while let Some(page) = paginator.next_page().await? {
     }
 }
 ```
+
+If you set `.offset(n)` before `.paginate()`, pagination starts from that offset. Paged queries also continue to populate `include_related()` relationships on each page.
 
 #### Auto-Paginate All Records
 
