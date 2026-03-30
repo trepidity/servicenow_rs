@@ -7,6 +7,9 @@ use crate::error::Result;
 use crate::model::record::Record;
 use crate::model::result::QueryResult;
 use crate::model::value::DisplayValue;
+use crate::query::batch;
+use crate::query::strategy::FetchStrategy;
+use crate::schema::registry::SchemaRegistry;
 use crate::transport::http::HttpTransport;
 
 /// Pagination state for iterating through large result sets.
@@ -41,6 +44,9 @@ pub struct Paginator {
     total_count: Option<u64>,
     display_value: DisplayValue,
     table: String,
+    schema: Option<Arc<SchemaRegistry>>,
+    related: Vec<String>,
+    strategy: FetchStrategy,
     done: bool,
 }
 
@@ -51,7 +57,11 @@ impl Paginator {
         table: String,
         base_params: Vec<(String, String)>,
         page_size: u32,
+        initial_offset: u32,
         display_value: DisplayValue,
+        schema: Option<Arc<SchemaRegistry>>,
+        related: Vec<String>,
+        strategy: FetchStrategy,
     ) -> Self {
         let path = format!("{}/{}", crate::api::table::TABLE_API_PATH, table);
         Self {
@@ -59,10 +69,13 @@ impl Paginator {
             path,
             base_params,
             page_size,
-            current_offset: 0,
+            current_offset: initial_offset,
             total_count: None,
             display_value,
             table,
+            schema,
+            related,
+            strategy,
             done: false,
         }
     }
@@ -96,13 +109,14 @@ impl Paginator {
         }
 
         // Parse records.
-        let records: Vec<Record> = match response.result {
+        let mut records: Vec<Record> = match response.result {
             Value::Array(arr) => arr
                 .iter()
                 .filter_map(|v| Record::from_json(&self.table, v, self.display_value))
                 .collect(),
             _ => Vec::new(),
         };
+        let errors = self.fetch_related(&mut records).await;
 
         let count = records.len() as u32;
 
@@ -126,7 +140,7 @@ impl Paginator {
         Ok(Some(QueryResult {
             records,
             total_count: self.total_count,
-            errors: Vec::new(),
+            errors,
         }))
     }
 
@@ -163,5 +177,56 @@ impl Paginator {
             total_count: self.total_count,
             errors: all_errors,
         })
+    }
+
+    async fn fetch_related(&self, records: &mut [Record]) -> Vec<crate::error::Error> {
+        if self.related.is_empty() || records.is_empty() {
+            return Vec::new();
+        }
+
+        let schema = match &self.schema {
+            Some(s) => s,
+            None => {
+                debug!("no schema loaded, skipping related record fetch");
+                return vec![crate::error::Error::Schema(
+                    "cannot fetch related records without a schema. \
+                     Load a schema definition to enable relationship traversal."
+                        .to_string(),
+                )];
+            }
+        };
+
+        let mut rel_defs = Vec::new();
+        let mut missing_errors = Vec::new();
+
+        for rel_name in &self.related {
+            match schema.relationship(&self.table, rel_name) {
+                Some(rel_def) => rel_defs.push((rel_name.as_str(), rel_def)),
+                None => missing_errors.push(crate::error::Error::Schema(format!(
+                    "relationship '{}' not found on table '{}'",
+                    rel_name, self.table
+                ))),
+            }
+        }
+
+        if rel_defs.is_empty() {
+            return missing_errors;
+        }
+
+        let mut errors = match self.strategy {
+            FetchStrategy::Auto | FetchStrategy::Concurrent | FetchStrategy::DotWalk => {
+                batch::fetch_related_concurrent(
+                    &self.transport,
+                    &self.table,
+                    records,
+                    &rel_defs,
+                    self.display_value,
+                )
+                .await
+            }
+        };
+
+        errors.extend(missing_errors);
+        errors
     }
 }

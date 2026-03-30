@@ -373,7 +373,11 @@ impl TableApi {
             self.table,
             params,
             page_size,
+            self.offset.unwrap_or(0),
             self.display_value,
+            self.schema,
+            self.related,
+            self.strategy,
         ))
     }
 
@@ -567,24 +571,6 @@ impl TableApi {
         }
         all_fields.extend(self.dot_walk_fields.iter().cloned());
 
-        // If using DotWalk strategy with include_related, generate dot-walk
-        // field names from the schema relationships.
-        if self.strategy == FetchStrategy::DotWalk && !self.related.is_empty() {
-            if let Some(ref schema) = self.schema {
-                for rel_name in &self.related {
-                    if let Some(rel_def) = schema.relationship(&self.table, rel_name) {
-                        // Add commonly useful fields from the related table.
-                        // Get field names from schema if available.
-                        if let Some(related_table) = schema.table(&rel_def.table) {
-                            for field_name in related_table.fields.keys() {
-                                all_fields.push(format!("{}.{}", rel_name, field_name));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         if !all_fields.is_empty() {
             params.push(("sysparm_fields".to_string(), all_fields.join(",")));
         }
@@ -653,7 +639,7 @@ impl TableApi {
 
         // Use the configured strategy.
         let mut errors = match self.strategy {
-            FetchStrategy::Concurrent | FetchStrategy::Auto => {
+            FetchStrategy::Concurrent | FetchStrategy::Auto | FetchStrategy::DotWalk => {
                 batch::fetch_related_concurrent(
                     &self.transport,
                     &self.table,
@@ -662,22 +648,7 @@ impl TableApi {
                     self.display_value,
                 )
                 .await
-            }
-            FetchStrategy::DotWalk => {
-                // DotWalk adds dot-walked field names at query build time
-                // (see build_params_without_pagination) but still needs concurrent
-                // fetches for full related-record objects. The dot-walked fields
-                // provide inline data; concurrent fetches populate the related() API.
-                debug!("DotWalk strategy: dot-walked fields added at query time, fetching full related records concurrently");
-                batch::fetch_related_concurrent(
-                    &self.transport,
-                    &self.table,
-                    records,
-                    &rel_defs,
-                    self.display_value,
-                )
-                .await
-            }
+            } // FetchStrategy::DotWalk is handled above as a safe fallback.
         };
 
         errors.extend(missing_errors);

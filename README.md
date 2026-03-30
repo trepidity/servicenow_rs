@@ -24,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-servicenow_rs = "0.1"
+servicenow_rs = "0.2.1"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 ```

@@ -705,6 +705,58 @@ async fn test_dot_walk_with_display_value_all() {
 }
 
 #[tokio::test]
+async fn test_include_related_with_display_value_display() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_request"))
+        .and(query_param("sysparm_display_value", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "chg_sys_id",
+                    "number": "CHG0012345"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_task"))
+        .and(query_param("sysparm_display_value", "all"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": { "value": "ctask1", "display_value": "ctask1" },
+                    "number": { "value": "CTASK0001", "display_value": "CTASK0001" },
+                    "change_request": {
+                        "value": "chg_sys_id",
+                        "display_value": "CHG0012345"
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("change_request")
+        .include_related(&["change_task"])
+        .display_value(DisplayValue::Display)
+        .execute()
+        .await
+        .expect("query failed");
+
+    assert_eq!(result.len(), 1);
+    let tasks = result.records[0].related("change_task");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].get_str("number"), Some("CTASK0001"));
+}
+
+#[tokio::test]
 async fn test_pagination() {
     let server = MockServer::start().await;
     let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -782,6 +834,171 @@ async fn test_pagination() {
     let page4 = paginator.next_page().await.unwrap();
     assert!(page4.is_none()); // no more pages
     assert!(paginator.is_done());
+}
+
+#[tokio::test]
+async fn test_pagination_with_offset() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "2"))
+        .and(query_param("sysparm_limit", "2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "4")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a3", "number": "INC003" },
+                        { "sys_id": "a4", "number": "INC004" }
+                    ]
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let mut paginator = client
+        .table("incident")
+        .offset(2)
+        .limit(2)
+        .paginate()
+        .unwrap();
+    let page = paginator.next_page().await.unwrap().unwrap();
+
+    assert_eq!(page.len(), 2);
+    assert_eq!(page.records[0].get_str("number"), Some("INC003"));
+    assert_eq!(paginator.current_offset(), 4);
+}
+
+#[tokio::test]
+async fn test_execute_all_with_related_records() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_request"))
+        .and(query_param("sysparm_offset", "0"))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "2")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "chg1", "number": "CHG001" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_request"))
+        .and(query_param("sysparm_offset", "1"))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "2")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "chg2", "number": "CHG002" }
+                    ]
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_task"))
+        .and(query_param("sysparm_query", "change_requestINchg1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "ctask1",
+                    "number": "CTASK001",
+                    "change_request": "chg1"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_task"))
+        .and(query_param("sysparm_query", "change_requestINchg2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "ctask2",
+                    "number": "CTASK002",
+                    "change_request": "chg2"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("change_request")
+        .include_related(&["change_task"])
+        .limit(1)
+        .execute_all(None)
+        .await
+        .expect("execute_all failed");
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result.records[0].related("change_task").len(), 1);
+    assert_eq!(result.records[1].related("change_task").len(), 1);
+}
+
+#[tokio::test]
+async fn test_include_related_dotwalk_strategy_falls_back_to_concurrent() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_request"))
+        .and(query_param("sysparm_fields", "number"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                { "sys_id": "chg1", "number": "CHG001" }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_task"))
+        .and(query_param("sysparm_query", "change_requestINchg1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "ctask1",
+                    "number": "CTASK001",
+                    "change_request": "chg1"
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let result = client
+        .table("change_request")
+        .fields(&["number"])
+        .include_related(&["change_task"])
+        .strategy(FetchStrategy::DotWalk)
+        .execute()
+        .await
+        .expect("query failed");
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result.records[0].related("change_task").len(), 1);
 }
 
 #[tokio::test]

@@ -4,8 +4,11 @@ pub enum FetchStrategy {
     /// Library picks the best strategy based on context.
     #[default]
     Auto,
-    /// Use ServiceNow dot-walking to inline related fields.
-    /// Efficient (single HTTP call) but only retrieves specific fields, not full records.
+    /// Preserve explicit `.dot_walk()` field requests while falling back to
+    /// concurrent related-record fetches for `.include_related()`.
+    ///
+    /// ServiceNow dot-walking only works through actual reference fields, so
+    /// schema relationship names are not expanded into `sysparm_fields`.
     DotWalk,
     /// Fire parallel HTTP requests for each relationship and assemble client-side.
     /// Returns full related records. Works with any ServiceNow instance.

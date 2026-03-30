@@ -47,8 +47,13 @@ pub async fn fetch_related_concurrent(
             let rel_def = (*rel_def).clone();
 
             async move {
-                let result =
-                    fetch_relationship(&transport, &sys_id_list, &rel_def, display_value).await;
+                let result = fetch_relationship_with_raw_refs(
+                    &transport,
+                    &sys_id_list,
+                    &rel_def,
+                    display_value,
+                )
+                .await;
                 (rel_name, rel_def, result)
             }
         })
@@ -96,7 +101,7 @@ pub async fn fetch_related_concurrent(
 }
 
 /// Fetch all records from a relationship table matching the given parent sys_ids.
-async fn fetch_relationship(
+pub(crate) async fn fetch_relationship_with_raw_refs(
     transport: &HttpTransport,
     sys_id_list: &str,
     rel_def: &RelationshipDef,
@@ -112,11 +117,18 @@ async fn fetch_relationship(
     }
 
     let path = format!("{}/{}", crate::api::table::TABLE_API_PATH, rel_def.table);
+    let response_display_value = match display_value {
+        // Related-record matching needs the raw foreign key to be present.
+        // Request "all" here so reference fields still carry their sys_id
+        // even when the caller wants display-oriented accessors.
+        DisplayValue::Display => DisplayValue::Both,
+        other => other,
+    };
     let params = vec![
         ("sysparm_query".to_string(), query),
         (
             "sysparm_display_value".to_string(),
-            display_value.as_param().to_string(),
+            response_display_value.as_param().to_string(),
         ),
         (
             "sysparm_exclude_reference_link".to_string(),
