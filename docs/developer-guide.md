@@ -1150,6 +1150,44 @@ for (name, def) in &rels {
 }
 ```
 
+### Record Number Resolution
+
+`ServiceNowClient::get_by_number()` resolves the destination table from the record number prefix, then issues a normal table query on `number`.
+
+```rust
+let record = client.get_by_number("TASK3462966").await?;
+
+if let Some(record) = record {
+    println!("Resolved table lookup: {}",
+        record.get_str("number").unwrap_or("?"));
+}
+```
+
+Default prefix mappings include:
+
+| Prefix | Table |
+|---|---|
+| `INC` | `incident` |
+| `CHG` | `change_request` |
+| `CTASK` | `change_task` |
+| `RITM` | `sc_req_item` |
+| `REQ` | `sc_request` |
+| `SCTASK` | `sc_task` |
+| `TASK` | `sc_task` |
+
+This means a catalog task number like `TASK3462966` resolves to `sc_task` by default, not the base `task` table.
+
+If your instance has custom prefixes, register them during client construction:
+
+```rust
+let client = ServiceNowClient::builder()
+    .instance("mycompany")
+    .auth(BasicAuth::new("admin", "password"))
+    .register_prefix("MYPREFIX", "u_custom_table")
+    .build()
+    .await?;
+```
+
 ### Skipping Count for Performance
 
 On large tables, ServiceNow must count all matching records to populate the `X-Total-Count` header. Skip it when you don't need the total:

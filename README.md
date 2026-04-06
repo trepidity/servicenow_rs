@@ -85,6 +85,40 @@ if let Some(r) = record {
 }
 ```
 
+### Lookup by Record Number
+
+```rust
+let record = client.get_by_number("TASK3462966").await?;
+
+if let Some(r) = record {
+    println!("{}: {}",
+        r.get_str("number").unwrap_or("?"),
+        r.get_str("short_description").unwrap_or("?"),
+    );
+}
+```
+
+Record numbers are resolved from their alphabetic prefix. Default mappings include:
+
+- `INC` -> `incident`
+- `CHG` -> `change_request`
+- `CTASK` -> `change_task`
+- `RITM` -> `sc_req_item`
+- `REQ` -> `sc_request`
+- `SCTASK` -> `sc_task`
+- `TASK` -> `sc_task`
+
+If your instance uses custom prefixes, register them on the builder:
+
+```rust
+let client = ServiceNowClient::builder()
+    .instance("mycompany")
+    .auth(BasicAuth::new("admin", "password"))
+    .register_prefix("MYPREFIX", "u_custom_table")
+    .build()
+    .await?;
+```
+
 ### Create a Record
 
 ```rust

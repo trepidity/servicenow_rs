@@ -1507,12 +1507,14 @@ async fn test_prefix_resolution() {
     assert_eq!(client.table_for_prefix("CTASK"), Some("change_task"));
     assert_eq!(client.table_for_prefix("PRB"), Some("problem"));
     assert_eq!(client.table_for_prefix("RITM"), Some("sc_req_item"));
+    assert_eq!(client.table_for_prefix("TASK"), Some("sc_task"));
 
     assert_eq!(client.table_for_number("INC0012345"), Some("incident"));
     assert_eq!(
         client.table_for_number("CHG0307336"),
         Some("change_request")
     );
+    assert_eq!(client.table_for_number("TASK3462966"), Some("sc_task"));
     assert_eq!(client.table_for_number("UNKNOWN001"), None);
 }
 
@@ -1547,6 +1549,39 @@ async fn test_get_by_number() {
     let record = record.unwrap();
     assert_eq!(record.get_str("number"), Some("INC0012345"));
     assert_eq!(record.get_str("short_description"), Some("Network outage"));
+}
+
+#[tokio::test]
+async fn test_get_by_number_sc_task_task_prefix() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sc_task"))
+        .and(query_param("sysparm_query", "number=TASK3462966"))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "sctask123",
+                    "number": "TASK3462966",
+                    "short_description": "Catalog task"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let record = client
+        .get_by_number("TASK3462966")
+        .await
+        .expect("get_by_number failed");
+
+    assert!(record.is_some());
+    let record = record.unwrap();
+    assert_eq!(record.get_str("number"), Some("TASK3462966"));
+    assert_eq!(record.get_str("short_description"), Some("Catalog task"));
 }
 
 #[tokio::test]

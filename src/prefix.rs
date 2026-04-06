@@ -94,7 +94,7 @@ impl Default for PrefixRegistry {
         registry.register("RITM", "sc_req_item");
         registry.register("REQ", "sc_request");
         registry.register("SCTASK", "sc_task");
-        registry.register("TASK", "task");
+        registry.register("TASK", "sc_task");
         // Knowledge.
         registry.register("KB", "kb_knowledge");
         // Project / Agile.
@@ -143,6 +143,7 @@ mod tests {
         assert_eq!(reg.table_for_prefix("RITM"), Some("sc_req_item"));
         assert_eq!(reg.table_for_prefix("REQ"), Some("sc_request"));
         assert_eq!(reg.table_for_prefix("SCTASK"), Some("sc_task"));
+        assert_eq!(reg.table_for_prefix("TASK"), Some("sc_task"));
         assert_eq!(reg.table_for_prefix("KB"), Some("kb_knowledge"));
         assert_eq!(reg.table_for_prefix("STRY"), Some("rm_story"));
         assert_eq!(reg.table_for_prefix("PRJ"), Some("pm_project"));
@@ -166,6 +167,7 @@ mod tests {
         assert_eq!(reg.table_for_number("CTASK0457943"), Some("change_task"));
         assert_eq!(reg.table_for_number("RITM2513403"), Some("sc_req_item"));
         assert_eq!(reg.table_for_number("REQ2540612"), Some("sc_request"));
+        assert_eq!(reg.table_for_number("TASK3462966"), Some("sc_task"));
         assert_eq!(reg.table_for_number("KB0010001"), Some("kb_knowledge"));
     }
 
