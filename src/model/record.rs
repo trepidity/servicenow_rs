@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use super::journal::{self, JournalEntry};
 use super::value::{parse_field_value, DisplayValue, FieldValue};
 
 /// A single record from a ServiceNow table.
@@ -143,6 +144,31 @@ impl Record {
     /// Check if this record has any related records.
     pub fn has_related(&self) -> bool {
         !self.related.is_empty()
+    }
+
+    /// Parse a journal field (e.g. `"comments"`, `"work_notes"`) into structured entries.
+    ///
+    /// Returns an empty vec if the field is missing or empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use servicenow_rs::prelude::*;
+    ///
+    /// let mut record = Record::new("incident", "abc123");
+    /// record.set("comments", FieldValue::from_display(
+    ///     "2026-04-03 14:53:01 - Conor Coleman (Additional Comments (Public))\nHello\n".into()
+    /// ));
+    ///
+    /// let entries = record.parse_journal("comments");
+    /// assert_eq!(entries.len(), 1);
+    /// assert_eq!(entries[0].author, "Conor Coleman");
+    /// ```
+    pub fn parse_journal(&self, field: &str) -> Vec<JournalEntry> {
+        match self.get_str(field) {
+            Some(blob) if !blob.trim().is_empty() => journal::parse_journal(blob),
+            _ => Vec::new(),
+        }
     }
 }
 

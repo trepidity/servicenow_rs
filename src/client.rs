@@ -329,6 +329,137 @@ impl ServiceNowClient {
             .display_value(DisplayValue::Display)
     }
 
+    // ── Catalog Helpers ────────────────────────────────────────────
+
+    /// Fetch catalog variables for a requested item (RITM).
+    ///
+    /// Catalog variables are the form fields users fill out when submitting a
+    /// service catalog request. They are stored in `sc_item_option` and linked
+    /// via `sc_item_option_mtom`.
+    ///
+    /// Returns variables sorted by form display order. Variables with no label
+    /// are excluded.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let vars = client.catalog_variables("ritm_sys_id_here").await?;
+    /// for var in &vars {
+    ///     println!("{}: {}", var.name, var.value);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn catalog_variables(
+        &self,
+        ritm_sys_id: &str,
+    ) -> Result<Vec<crate::api::catalog::CatalogVariable>> {
+        crate::api::catalog::fetch_catalog_variables(&self.transport, ritm_sys_id).await
+    }
+
+    /// Resolve reference and list collector values in catalog variables to
+    /// human-readable display names.
+    ///
+    /// Variables whose [`reference_table`](crate::api::catalog::CatalogVariable::reference_table)
+    /// is set have values that are sys_ids (or comma-separated sys_ids for list
+    /// collectors). This method batch-queries each referenced table and replaces
+    /// the sys_ids with the record `name` field.
+    ///
+    /// If a table query fails (e.g. ACL restrictions), those variables keep
+    /// their original sys_id values.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> servicenow_rs::error::Result<()> {
+    /// # let client: servicenow_rs::client::ServiceNowClient = todo!();
+    /// let mut vars = client.catalog_variables("ritm_sys_id_here").await?;
+    /// client.resolve_catalog_variables(&mut vars).await?;
+    /// for var in &vars {
+    ///     println!("{}: {}", var.name, var.value);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn resolve_catalog_variables(
+        &self,
+        variables: &mut [crate::api::catalog::CatalogVariable],
+    ) -> Result<()> {
+        use std::collections::HashMap;
+
+        // Collect all sys_ids grouped by their reference table
+        let mut table_ids: HashMap<String, Vec<String>> = HashMap::new();
+        for var in variables.iter() {
+            if let Some(ref table) = var.reference_table {
+                for id in var.value.split(',') {
+                    let id = id.trim();
+                    if is_sys_id(id) {
+                        table_ids.entry(table.clone()).or_default().push(id.to_string());
+                    }
+                }
+            }
+        }
+
+        if table_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Batch-query each reference table and build a sys_id → name map
+        let mut name_map: HashMap<String, String> = HashMap::new();
+
+        for (table, ids) in &table_ids {
+            let mut unique_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+            unique_ids.sort_unstable();
+            unique_ids.dedup();
+
+            // If the query fails (ACL, table doesn't exist), skip silently
+            if let Ok(result) = self
+                .table(table)
+                .in_list("sys_id", &unique_ids)
+                .fields(&["sys_id", "name"])
+                .display_value(DisplayValue::Display)
+                .execute()
+                .await
+            {
+                for record in &result.records {
+                    if let Some(name) = record.get_str("name") {
+                        if !name.is_empty() {
+                            name_map.insert(record.sys_id.clone(), name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        if name_map.is_empty() {
+            return Ok(());
+        }
+
+        // Replace sys_ids with resolved names in variable values
+        for var in variables.iter_mut() {
+            if var.reference_table.is_some() {
+                let parts: Vec<&str> = var.value.split(',').collect();
+                if parts.iter().any(|id| name_map.contains_key(id.trim())) {
+                    let resolved: Vec<String> = parts
+                        .iter()
+                        .map(|id| {
+                            let id = id.trim();
+                            name_map
+                                .get(id)
+                                .cloned()
+                                .unwrap_or_else(|| id.to_string())
+                        })
+                        .collect();
+                    var.value = resolved.join(", ");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     // ── Record Update Helpers ──────────────────────────────────────
 
     /// Append a work note to a record.
@@ -786,6 +917,11 @@ fn resolve_schema(
         (Some(release), None) => Ok(Some(SchemaRegistry::from_release(release)?)),
         (None, _) => Ok(None),
     }
+}
+
+/// Check if a string looks like a ServiceNow sys_id (32-character hex string).
+fn is_sys_id(s: &str) -> bool {
+    s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 // Implement Debug manually because Box<dyn Authenticator> is in the builder.
