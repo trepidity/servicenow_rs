@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::error::Result;
 use crate::model::DisplayValue;
 use crate::query::builder::TableApi;
-use crate::transport::http::HttpTransport;
+use crate::transport::TransportHandle;
 
 /// A single catalog variable from a requested item.
 #[derive(Debug, Clone)]
@@ -43,11 +43,11 @@ pub struct CatalogVariable {
 ///
 /// Results are sorted by form order. Variables with no label are excluded.
 pub(crate) async fn fetch_catalog_variables(
-    transport: &Arc<HttpTransport>,
+    transport: TransportHandle,
     ritm_sys_id: &str,
 ) -> Result<Vec<CatalogVariable>> {
     // Step 1: get the many-to-many links
-    let mtom_api = TableApi::new(Arc::clone(transport), None, "sc_item_option_mtom")
+    let mtom_api = TableApi::new(Arc::clone(&transport), None, "sc_item_option_mtom")
         .equals("request_item", ritm_sys_id);
     let mtom = mtom_api.execute().await?;
 
@@ -61,7 +61,7 @@ pub(crate) async fn fetch_catalog_variables(
     // Step 2: fetch the actual option records (name + value).
     // Use Both mode so we can read the raw item_option_new sys_id (via get_raw)
     // while still getting the display label (via get_str).
-    let opts_api = TableApi::new(Arc::clone(transport), None, "sc_item_option")
+    let opts_api = TableApi::new(Arc::clone(&transport), None, "sc_item_option")
         .in_list("sys_id", &opt_ids)
         .fields(&["sys_id", "item_option_new", "value", "order"])
         .display_value(DisplayValue::Both);
@@ -82,7 +82,7 @@ pub(crate) async fn fetch_catalog_variables(
     // Reference-type variables store the target table in `reference`, while
     // List Collector variables use `list_table`.
     let ref_map: HashMap<String, String> = if !var_def_ids.is_empty() {
-        let defs = TableApi::new(Arc::clone(transport), None, "item_option_new")
+        let defs = TableApi::new(Arc::clone(&transport), None, "item_option_new")
             .in_list("sys_id", &var_def_ids)
             .fields(&["sys_id", "reference", "list_table"])
             .display_value(DisplayValue::Raw)

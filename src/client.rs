@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use url::Url;
 
@@ -17,7 +18,7 @@ use crate::prefix::PrefixRegistry;
 use crate::query::builder::{validate_identifier, TableApi};
 use crate::query::filter::Order;
 use crate::schema::registry::SchemaRegistry;
-use crate::transport::http::HttpTransport;
+use crate::transport::{GraphqlTransport, HttpTransport, Transport, TransportMode, TransportSelection};
 use crate::transport::retry::{RateLimiter, RetryConfig};
 
 /// The primary client for interacting with a ServiceNow instance.
@@ -46,7 +47,7 @@ use crate::transport::retry::{RateLimiter, RetryConfig};
 /// ```
 #[derive(Debug)]
 pub struct ServiceNowClient {
-    transport: Arc<HttpTransport>,
+    transport: Arc<dyn Transport>,
     schema: Option<Arc<SchemaRegistry>>,
     prefix_registry: PrefixRegistry,
     base_url: String,
@@ -128,6 +129,11 @@ impl ServiceNowClient {
         &self.base_url
     }
 
+    /// Get the configured transport selection policy.
+    pub fn transport_selection(&self) -> TransportSelection {
+        self.transport.selection()
+    }
+
     /// Send a raw POST request to any ServiceNow API endpoint.
     ///
     /// Use this for APIs not covered by the Table API (e.g. Service Catalog,
@@ -194,6 +200,53 @@ impl ServiceNowClient {
             })?;
 
         self.table(table).equals("number", number).first().await
+    }
+
+    /// Fetch related rows for multiple parent records in one query by foreign key.
+    ///
+    /// This is useful when the caller already knows the child table and link field,
+    /// and wants to avoid one HTTP request per parent.
+    pub async fn fetch_related_by_foreign_key(
+        &self,
+        table: &str,
+        foreign_key: &str,
+        parent_ids: &[&str],
+        fields: &[&str],
+        display_value: DisplayValue,
+        order_by: Option<(&str, Order)>,
+    ) -> Result<HashMap<String, Vec<Record>>> {
+        if parent_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut query = self
+            .table(table)
+            .in_list(foreign_key, parent_ids)
+            .fields(fields)
+            .display_value(display_value)
+            .exclude_reference_link(true);
+        if let Some((field, direction)) = order_by {
+            query = query.order_by(field, direction);
+        }
+
+        let response = query.execute().await?;
+        let mut by_parent: HashMap<String, Vec<Record>> = parent_ids
+            .iter()
+            .map(|id| ((*id).to_string(), Vec::new()))
+            .collect();
+
+        for record in response.records {
+            let Some(parent_id) = record
+                .get_raw(foreign_key)
+                .or_else(|| record.get_str(foreign_key))
+                .map(ToString::to_string)
+            else {
+                continue;
+            };
+            by_parent.entry(parent_id).or_default().push(record);
+        }
+
+        Ok(by_parent)
     }
 
     // ── Journal Entry Reading ───────────────────────────────────────
@@ -356,7 +409,8 @@ impl ServiceNowClient {
         &self,
         ritm_sys_id: &str,
     ) -> Result<Vec<crate::api::catalog::CatalogVariable>> {
-        crate::api::catalog::fetch_catalog_variables(&self.transport, ritm_sys_id).await
+        crate::api::catalog::fetch_catalog_variables(Arc::clone(&self.transport), ritm_sys_id)
+            .await
     }
 
     /// Resolve reference and list collector values in catalog variables to
@@ -748,6 +802,24 @@ impl ClientBuilder {
         self
     }
 
+    /// Override the preferred transport mode.
+    pub fn transport_mode(mut self, mode: TransportMode) -> Self {
+        self.config.transport.preferred = mode;
+        self
+    }
+
+    /// Control whether GraphQL transport falls back to REST on unsupported or failed reads.
+    pub fn graphql_fallback(mut self, fallback: bool) -> Self {
+        self.config.transport.graphql_fallback = fallback;
+        self
+    }
+
+    /// Set the minimum field-count threshold for GraphQL table-list routing.
+    pub fn graphql_batch_threshold(mut self, threshold: usize) -> Self {
+        self.config.transport.graphql_batch_threshold = threshold;
+        self
+    }
+
     /// Load configuration from a TOML file.
     pub fn from_config_file(mut self, path: impl AsRef<Path>) -> Self {
         match Config::from_file(path.as_ref()) {
@@ -837,13 +909,25 @@ impl ClientBuilder {
             .or(config.transport.rate_limit)
             .map(RateLimiter::new);
 
-        let transport = Arc::new(HttpTransport::new(
+        let transport_selection = TransportSelection::new(
+            config.transport.preferred,
+            config.transport.graphql_fallback,
+            config.transport.graphql_batch_threshold,
+        );
+
+        let http_transport = HttpTransport::new(
             base_url,
             authenticator,
             timeout,
             retry_config,
             rate_limiter,
-        )?);
+            transport_selection,
+        )?;
+
+        let transport: Arc<dyn Transport> = match transport_selection.preferred {
+            TransportMode::Graphql => Arc::new(GraphqlTransport::new(http_transport)),
+            TransportMode::Auto | TransportMode::Rest => Arc::new(http_transport),
+        };
 
         // Resolve schema.
         let schema = resolve_schema(

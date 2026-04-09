@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use serde_json::Value;
 use tracing::debug;
 
 use crate::error::{Error, Result};
 use crate::query::filter::{encode_query, Condition, Filter, Joiner, Operator, Order};
-use crate::transport::http::HttpTransport;
+use crate::transport::TransportHandle;
 
 /// Builder for constructing ServiceNow Aggregate/Stats API queries.
 ///
@@ -38,7 +37,7 @@ use crate::transport::http::HttpTransport;
 /// # }
 /// ```
 pub struct AggregateApi {
-    transport: Arc<HttpTransport>,
+    transport: TransportHandle,
     table: String,
     conditions: Vec<Condition>,
     order_by: Vec<(String, Order)>,
@@ -54,7 +53,7 @@ pub struct AggregateApi {
 
 impl AggregateApi {
     /// Create a new AggregateApi. Called via `ServiceNowClient::aggregate()`.
-    pub(crate) fn new(transport: Arc<HttpTransport>, table: impl Into<String>) -> Self {
+    pub(crate) fn new(transport: TransportHandle, table: impl Into<String>) -> Self {
         Self {
             transport,
             table: table.into(),

@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use serde_json::json;
 use tracing::debug;
 
 use crate::error::{Error, Result};
 use crate::model::record::Record;
 use crate::model::value::DisplayValue;
-use crate::transport::http::HttpTransport;
+use crate::transport::TransportHandle;
 
 /// The target state for an approval action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +61,7 @@ impl ApprovalAction {
 /// # }
 /// ```
 pub struct ApprovalBuilder {
-    transport: Arc<HttpTransport>,
+    transport: TransportHandle,
     source_table: String,
     record_sys_id: String,
     approver_sys_id: String,
@@ -73,7 +71,7 @@ pub struct ApprovalBuilder {
 
 impl ApprovalBuilder {
     pub(crate) fn new(
-        transport: Arc<HttpTransport>,
+        transport: TransportHandle,
         source_table: &str,
         record_sys_id: &str,
         approver_sys_id: &str,

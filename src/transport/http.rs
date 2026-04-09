@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 
 use super::response::{self, ServiceNowResponse};
 use super::retry::{self, RateLimiter, RetryConfig};
+use super::{Transport, TransportSelection};
 
 /// HTTP transport layer wrapping reqwest with authentication, retry, and rate limiting.
 #[derive(Debug)]
@@ -20,6 +21,7 @@ pub struct HttpTransport {
     authenticator: Arc<dyn Authenticator>,
     retry_config: RetryConfig,
     rate_limiter: Option<RateLimiter>,
+    selection: TransportSelection,
 }
 
 impl HttpTransport {
@@ -30,6 +32,7 @@ impl HttpTransport {
         timeout: Duration,
         retry_config: RetryConfig,
         rate_limiter: Option<RateLimiter>,
+        selection: TransportSelection,
     ) -> Result<Self> {
         let mut builder = Client::builder()
             .timeout(timeout)
@@ -50,6 +53,7 @@ impl HttpTransport {
             authenticator,
             retry_config,
             rate_limiter,
+            selection,
         })
     }
 
@@ -213,6 +217,11 @@ impl HttpTransport {
             detail: None,
         }))
     }
+
+    /// Expose the configured transport selection policy.
+    pub fn selection(&self) -> TransportSelection {
+        self.selection
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -222,4 +231,49 @@ enum Method {
     Put,
     Patch,
     Delete,
+}
+
+#[async_trait::async_trait]
+impl Transport for HttpTransport {
+    async fn get(&self, path: &str, params: &[(String, String)]) -> Result<ServiceNowResponse> {
+        HttpTransport::get(self, path, params).await
+    }
+
+    async fn post(&self, path: &str, body: serde_json::Value) -> Result<ServiceNowResponse> {
+        HttpTransport::post(self, path, body).await
+    }
+
+    async fn post_with_params(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        body: serde_json::Value,
+    ) -> Result<ServiceNowResponse> {
+        HttpTransport::post_with_params(self, path, params, body).await
+    }
+
+    async fn put(&self, path: &str, body: serde_json::Value) -> Result<ServiceNowResponse> {
+        HttpTransport::put(self, path, body).await
+    }
+
+    async fn patch(&self, path: &str, body: serde_json::Value) -> Result<ServiceNowResponse> {
+        HttpTransport::patch(self, path, body).await
+    }
+
+    async fn patch_with_params(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        body: serde_json::Value,
+    ) -> Result<ServiceNowResponse> {
+        HttpTransport::patch_with_params(self, path, params, body).await
+    }
+
+    async fn delete(&self, path: &str) -> Result<ServiceNowResponse> {
+        HttpTransport::delete(self, path).await
+    }
+
+    fn selection(&self) -> TransportSelection {
+        self.selection
+    }
 }

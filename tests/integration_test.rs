@@ -16,6 +16,19 @@ async fn test_client(server: &MockServer) -> ServiceNowClient {
         .expect("failed to build test client")
 }
 
+async fn graphql_client(server: &MockServer) -> ServiceNowClient {
+    ServiceNowClient::builder()
+        .instance(server.uri())
+        .auth(BasicAuth::new("test_user", "test_pass"))
+        .schema_release("xanadu")
+        .allow_http()
+        .transport_mode(servicenow_rs::transport::TransportMode::Graphql)
+        .graphql_batch_threshold(1)
+        .build()
+        .await
+        .expect("failed to build GraphQL client")
+}
+
 #[tokio::test]
 async fn test_simple_query() {
     let server = MockServer::start().await;
@@ -59,6 +72,88 @@ async fn test_simple_query() {
         result.records[1].get_str("short_description"),
         Some("Server down")
     );
+}
+
+#[tokio::test]
+async fn test_graphql_table_query_executes_when_preferred() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/now/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "table": {
+                    "records": [
+                        {
+                            "sys_id": "abc123",
+                            "number": { "value": "CTASK001", "display_value": "CTASK001" },
+                            "short_description": { "value": "Patch cluster", "display_value": "Patch cluster" },
+                            "state": { "value": "1", "display_value": "Open" }
+                        }
+                    ]
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = graphql_client(&server).await;
+    let result = client
+        .table("change_task")
+        .equals("change_request", "chg-sys")
+        .fields(&["sys_id", "number", "short_description", "state"])
+        .display_value(DisplayValue::Both)
+        .limit(10)
+        .execute()
+        .await
+        .expect("graphql query failed");
+
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].get_str("number"), Some("CTASK001"));
+    assert_eq!(client.transport_selection().preferred, servicenow_rs::transport::TransportMode::Graphql);
+}
+
+#[tokio::test]
+async fn test_graphql_falls_back_to_rest_on_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/now/graphql"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "errors": [{ "message": "GraphQL unavailable" }]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/change_task"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": "abc123",
+                    "number": "CTASK001",
+                    "short_description": "Patch cluster",
+                    "state": "1"
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = graphql_client(&server).await;
+    let result = client
+        .table("change_task")
+        .equals("change_request", "chg-sys")
+        .fields(&["sys_id", "number", "short_description", "state"])
+        .display_value(DisplayValue::Both)
+        .limit(10)
+        .execute()
+        .await
+        .expect("fallback query failed");
+
+    assert_eq!(result.records[0].get_str("number"), Some("CTASK001"));
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::model::record::Record;
 use crate::model::value::DisplayValue;
 use crate::schema::definition::RelationshipDef;
-use crate::transport::http::HttpTransport;
+use crate::transport::TransportHandle;
 
 /// Fetch related records for a set of parent records using concurrent requests.
 ///
@@ -16,7 +16,7 @@ use crate::transport::http::HttpTransport;
 /// for all parent sys_ids at once (using IN operator), then distributes the results
 /// back to the correct parent records.
 pub async fn fetch_related_concurrent(
-    transport: &Arc<HttpTransport>,
+    transport: TransportHandle,
     parent_table: &str,
     parents: &mut [Record],
     relationships: &[(&str, &RelationshipDef)],
@@ -41,14 +41,14 @@ pub async fn fetch_related_concurrent(
     let futures: Vec<_> = relationships
         .iter()
         .map(|(rel_name, rel_def)| {
-            let transport = Arc::clone(transport);
+            let transport = Arc::clone(&transport);
             let sys_id_list = sys_id_list.clone();
             let rel_name = rel_name.to_string();
             let rel_def = (*rel_def).clone();
 
             async move {
                 let result = fetch_relationship_with_raw_refs(
-                    &transport,
+                    transport.as_ref(),
                     &sys_id_list,
                     &rel_def,
                     display_value,
@@ -102,7 +102,7 @@ pub async fn fetch_related_concurrent(
 
 /// Fetch all records from a relationship table matching the given parent sys_ids.
 pub(crate) async fn fetch_relationship_with_raw_refs(
-    transport: &HttpTransport,
+    transport: &dyn crate::transport::Transport,
     sys_id_list: &str,
     rel_def: &RelationshipDef,
     display_value: DisplayValue,

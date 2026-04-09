@@ -152,6 +152,21 @@ pub async fn parse_response(response: reqwest::Response) -> Result<ServiceNowRes
         });
     }
 
+    // GraphQL-style error payloads.
+    if let Some(errors) = json.get("errors").and_then(Value::as_array) {
+        let message = errors
+            .first()
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("GraphQL request failed")
+            .to_string();
+        return Err(Error::Api {
+            status,
+            message,
+            detail: Some(body.chars().take(500).collect()),
+        });
+    }
+
     // Non-2xx without an error object.
     if status >= 400 {
         return Err(Error::Api {
@@ -161,8 +176,12 @@ pub async fn parse_response(response: reqwest::Response) -> Result<ServiceNowRes
         });
     }
 
-    // Extract "result" field.
-    let result = json.get("result").cloned().unwrap_or(Value::Null);
+    // Extract "result" field, or GraphQL-style "data" when present.
+    let result = json
+        .get("result")
+        .cloned()
+        .or_else(|| json.get("data").cloned())
+        .unwrap_or(Value::Null);
 
     Ok(ServiceNowResponse {
         status,

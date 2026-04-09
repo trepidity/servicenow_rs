@@ -102,6 +102,7 @@ impl Default for PrefixRegistry {
         registry.register("STSK", "rm_scrum_task");
         registry.register("PRJ", "pm_project");
         registry.register("DMND", "dmn_demand");
+        registry.register("RPLN", "resource_plan");
         registry
     }
 }
@@ -148,7 +149,8 @@ mod tests {
         assert_eq!(reg.table_for_prefix("STRY"), Some("rm_story"));
         assert_eq!(reg.table_for_prefix("PRJ"), Some("pm_project"));
         assert_eq!(reg.table_for_prefix("DMND"), Some("dmn_demand"));
-        assert_eq!(reg.len(), 13);
+        assert_eq!(reg.table_for_prefix("RPLN"), Some("resource_plan"));
+        assert_eq!(reg.len(), 14);
     }
 
     #[test]
@@ -169,6 +171,7 @@ mod tests {
         assert_eq!(reg.table_for_number("REQ2540612"), Some("sc_request"));
         assert_eq!(reg.table_for_number("TASK3462966"), Some("sc_task"));
         assert_eq!(reg.table_for_number("KB0010001"), Some("kb_knowledge"));
+        assert_eq!(reg.table_for_number("RPLN0091599"), Some("resource_plan"));
     }
 
     #[test]

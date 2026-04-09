@@ -8,7 +8,7 @@ use crate::model::record::Record;
 use crate::model::result::QueryResult;
 use crate::model::value::DisplayValue;
 use crate::schema::registry::SchemaRegistry;
-use crate::transport::http::HttpTransport;
+use crate::transport::TransportHandle;
 
 use super::batch;
 use super::filter::{encode_query, Condition, Filter, Joiner, Operator, Order};
@@ -44,7 +44,7 @@ use super::strategy::FetchStrategy;
 /// # }
 /// ```
 pub struct TableApi {
-    transport: Arc<HttpTransport>,
+    transport: TransportHandle,
     schema: Option<Arc<SchemaRegistry>>,
     table: String,
     conditions: Vec<Condition>,
@@ -80,7 +80,7 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<()> {
 impl TableApi {
     /// Create a new TableApi. Typically called via `ServiceNowClient::table()`.
     pub(crate) fn new(
-        transport: Arc<HttpTransport>,
+        transport: TransportHandle,
         schema: Option<Arc<SchemaRegistry>>,
         table: impl Into<String>,
     ) -> Self {
@@ -641,7 +641,7 @@ impl TableApi {
         let mut errors = match self.strategy {
             FetchStrategy::Concurrent | FetchStrategy::Auto | FetchStrategy::DotWalk => {
                 batch::fetch_related_concurrent(
-                    &self.transport,
+                    Arc::clone(&self.transport),
                     &self.table,
                     records,
                     &rel_defs,

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::transport::TransportMode;
 
 /// Top-level configuration, typically loaded from `servicenow.toml`.
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -80,7 +81,7 @@ pub struct SchemaFileConfig {
 }
 
 /// Transport/HTTP settings.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TransportConfig {
     /// Request timeout in seconds.
     pub timeout_secs: Option<u64>,
@@ -88,6 +89,36 @@ pub struct TransportConfig {
     pub max_retries: Option<u32>,
     /// Rate limit (requests per second).
     pub rate_limit: Option<u32>,
+    /// Preferred transport mode. Today this is advisory only.
+    #[serde(default)]
+    pub preferred: TransportMode,
+    /// Whether GraphQL may transparently fall back to REST.
+    #[serde(default = "default_true")]
+    pub graphql_fallback: bool,
+    /// Minimum batch size before preferring GraphQL in the future.
+    #[serde(default = "default_graphql_batch_threshold")]
+    pub graphql_batch_threshold: usize,
+}
+
+impl Default for TransportConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: None,
+            max_retries: None,
+            rate_limit: None,
+            preferred: TransportMode::Auto,
+            graphql_fallback: true,
+            graphql_batch_threshold: 3,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_graphql_batch_threshold() -> usize {
+    3
 }
 
 impl Config {
@@ -253,5 +284,6 @@ rate_limit = 20
         assert_eq!(config.auth.username.as_deref(), Some("admin"));
         assert_eq!(config.transport.timeout_secs, Some(30));
         assert_eq!(config.transport.rate_limit, Some(20));
+        assert_eq!(config.transport.preferred, TransportMode::Auto);
     }
 }

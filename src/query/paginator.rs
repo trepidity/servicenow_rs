@@ -10,7 +10,7 @@ use crate::model::value::DisplayValue;
 use crate::query::batch;
 use crate::query::strategy::FetchStrategy;
 use crate::schema::registry::SchemaRegistry;
-use crate::transport::http::HttpTransport;
+use crate::transport::TransportHandle;
 
 /// Pagination state for iterating through large result sets.
 ///
@@ -36,7 +36,7 @@ use crate::transport::http::HttpTransport;
 /// # }
 /// ```
 pub struct Paginator {
-    transport: Arc<HttpTransport>,
+    transport: TransportHandle,
     path: String,
     base_params: Vec<(String, String)>,
     page_size: u32,
@@ -53,7 +53,7 @@ pub struct Paginator {
 impl Paginator {
     /// Create a new paginator. Called internally by `TableApi::paginate()`.
     pub(crate) fn new(
-        transport: Arc<HttpTransport>,
+        transport: TransportHandle,
         table: String,
         base_params: Vec<(String, String)>,
         page_size: u32,
@@ -216,7 +216,7 @@ impl Paginator {
         let mut errors = match self.strategy {
             FetchStrategy::Auto | FetchStrategy::Concurrent | FetchStrategy::DotWalk => {
                 batch::fetch_related_concurrent(
-                    &self.transport,
+                    Arc::clone(&self.transport),
                     &self.table,
                     records,
                     &rel_defs,
