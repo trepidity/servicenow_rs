@@ -2454,12 +2454,12 @@ async fn test_create_and_link_change_task() {
 async fn test_approve_change_request() {
     let server = MockServer::start().await;
 
-    // Step 1: Mock the lookup for the pending approval record.
+    // Step 1: Mock the lookup for the pending approval record (single OR query).
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
+            "(document_id=chg_sys_id^approver=user_sys_id^state=requested)^OR(sysapproval=chg_sys_id^approver=user_sys_id^state=requested)",
         ))
         .and(query_param("sysparm_limit", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -2520,12 +2520,12 @@ async fn test_approve_change_request() {
 async fn test_reject_change_request() {
     let server = MockServer::start().await;
 
-    // Lookup mock.
+    // Lookup mock (single OR query).
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
+            "(document_id=chg_sys_id^approver=user_sys_id^state=requested)^OR(sysapproval=chg_sys_id^approver=user_sys_id^state=requested)",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": [
@@ -2583,26 +2583,12 @@ async fn test_reject_change_request() {
 async fn test_approve_no_pending_approval() {
     let server = MockServer::start().await;
 
-    // Return empty results for both the preferred document_id lookup and the
-    // sysapproval fallback.
+    // Return empty results for the combined OR query.
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "document_id=chg_sys_id^approver=wrong_user_sys_id^state=requested",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "result": []
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/now/table/sysapproval_approver"))
-        .and(query_param(
-            "sysparm_query",
-            "sysapproval=chg_sys_id^approver=wrong_user_sys_id^state=requested",
+            "(document_id=chg_sys_id^approver=wrong_user_sys_id^state=requested)^OR(sysapproval=chg_sys_id^approver=wrong_user_sys_id^state=requested)",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": []
@@ -2634,12 +2620,12 @@ async fn test_approve_no_pending_approval() {
 async fn test_approve_without_comment() {
     let server = MockServer::start().await;
 
-    // Lookup mock.
+    // Lookup mock (single OR query).
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
+            "(document_id=chg_sys_id^approver=user_sys_id^state=requested)^OR(sysapproval=chg_sys_id^approver=user_sys_id^state=requested)",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": [{
@@ -2687,29 +2673,20 @@ async fn test_approve_without_comment() {
     assert_eq!(approval.get_str("state"), Some("Approved"));
 }
 
+/// Verifies that approval lookup issues exactly one GET request using a
+/// combined `^OR` query instead of two sequential queries.
 #[tokio::test]
-async fn test_approve_falls_back_to_sysapproval_lookup() {
+async fn test_approve_uses_single_or_query() {
     let server = MockServer::start().await;
 
+    // The single GET must use an OR query and be called exactly once.
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
+            "(document_id=chg_sys_id^approver=user_sys_id^state=requested)^OR(sysapproval=chg_sys_id^approver=user_sys_id^state=requested)",
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "result": []
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/now/table/sysapproval_approver"))
-        .and(query_param(
-            "sysparm_query",
-            "sysapproval=chg_sys_id^approver=user_sys_id^state=requested",
-        ))
+        .and(query_param("sysparm_limit", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": [{
                 "sys_id": "appr_sys_id",
@@ -2750,7 +2727,7 @@ async fn test_approve_falls_back_to_sysapproval_lookup() {
         .approve("change_request", "chg_sys_id", "user_sys_id")
         .execute()
         .await
-        .expect("approve fallback failed");
+        .expect("approve with OR query failed");
 
     assert_eq!(approval.get_str("state"), Some("Approved"));
 }
