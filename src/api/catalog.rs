@@ -46,9 +46,12 @@ pub(crate) async fn fetch_catalog_variables(
     transport: TransportHandle,
     ritm_sys_id: &str,
 ) -> Result<Vec<CatalogVariable>> {
-    // Step 1: get the many-to-many links
+    // Step 1: get the many-to-many links. Only `sc_item_option` is needed;
+    // skip the total-count header since we never use it here.
     let mtom_api = TableApi::new(Arc::clone(&transport), None, "sc_item_option_mtom")
-        .equals("request_item", ritm_sys_id);
+        .equals("request_item", ritm_sys_id)
+        .fields(&["sc_item_option"])
+        .no_count();
     let mtom = mtom_api.execute().await?;
 
     let opt_ids: Vec<&str> = mtom
@@ -66,7 +69,8 @@ pub(crate) async fn fetch_catalog_variables(
     let opts_api = TableApi::new(Arc::clone(&transport), None, "sc_item_option")
         .in_list("sys_id", &opt_ids)
         .fields(&["sys_id", "item_option_new", "value", "order"])
-        .display_value(DisplayValue::Both);
+        .display_value(DisplayValue::Both)
+        .no_count();
     let opts = opts_api.execute().await?;
 
     // Collect unique variable-definition sys_ids for the metadata lookup
@@ -90,6 +94,7 @@ pub(crate) async fn fetch_catalog_variables(
             .in_list("sys_id", &var_def_ids)
             .fields(&["sys_id", "reference", "list_table"])
             .display_value(DisplayValue::Raw)
+            .no_count()
             .execute()
             .await?;
 
