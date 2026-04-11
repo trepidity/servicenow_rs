@@ -13,6 +13,8 @@ pub struct ServiceNowResponse {
     pub total_count: Option<u64>,
     /// Parsed Link header pagination URLs.
     pub links: PaginationLinks,
+    /// ETag header value, if present in the response.
+    pub etag: Option<String>,
 }
 
 /// Parsed RFC 5988 Link header from ServiceNow pagination responses.
@@ -89,6 +91,13 @@ pub async fn parse_response(response: reqwest::Response) -> Result<ServiceNowRes
         .map(parse_link_header)
         .unwrap_or_default();
 
+    // Extract ETag for conditional request support.
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
     // Check for auth failures.
     if status == 401 || status == 403 {
         let body = response.text().await.unwrap_or_default();
@@ -124,6 +133,7 @@ pub async fn parse_response(response: reqwest::Response) -> Result<ServiceNowRes
             result: Value::Null,
             total_count,
             links,
+            etag,
         });
     }
 
@@ -188,6 +198,7 @@ pub async fn parse_response(response: reqwest::Response) -> Result<ServiceNowRes
         result,
         total_count,
         links,
+        etag,
     })
 }
 

@@ -125,6 +125,7 @@ impl GraphqlTransport {
             result,
             total_count: response.total_count,
             links: response.links,
+            etag: None,
         })
     }
 }
