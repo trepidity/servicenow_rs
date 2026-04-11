@@ -111,6 +111,28 @@ pub fn parse_field_value(json: serde_json::Value, mode: DisplayValue) -> FieldVa
     }
 }
 
+/// Parse a ServiceNow timestamp string into a UTC `DateTime`.
+///
+/// Handles two formats:
+/// - RFC 3339 (e.g. `"2026-04-09T10:11:12Z"`)
+/// - ServiceNow native (e.g. `"2026-04-09 10:11:12"`)
+///
+/// Returns `None` for `None`, empty, or whitespace-only input.
+pub fn parse_servicenow_timestamp(value: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +200,26 @@ mod tests {
         assert_eq!(DisplayValue::Raw.as_param(), "false");
         assert_eq!(DisplayValue::Display.as_param(), "true");
         assert_eq!(DisplayValue::Both.as_param(), "all");
+    }
+
+    #[test]
+    fn test_parse_servicenow_timestamp_rfc3339() {
+        let result = parse_servicenow_timestamp(Some("2026-04-09T10:11:12Z"));
+        assert!(result.is_some());
+        let dt = result.unwrap();
+        assert_eq!(dt.format("%Y-%m-%d").to_string(), "2026-04-09");
+    }
+
+    #[test]
+    fn test_parse_servicenow_timestamp_naive() {
+        let result = parse_servicenow_timestamp(Some("2026-04-09 10:11:12"));
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_servicenow_timestamp_empty() {
+        assert!(parse_servicenow_timestamp(None).is_none());
+        assert!(parse_servicenow_timestamp(Some("")).is_none());
+        assert!(parse_servicenow_timestamp(Some("   ")).is_none());
     }
 }

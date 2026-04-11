@@ -6,4 +6,4 @@ pub mod value;
 pub use journal::JournalEntry;
 pub use record::Record;
 pub use result::QueryResult;
-pub use value::{DisplayValue, FieldValue};
+pub use value::{DisplayValue, FieldValue, parse_servicenow_timestamp};

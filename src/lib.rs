@@ -61,7 +61,7 @@ pub mod prelude {
     pub use crate::auth::{BasicAuth, TokenAuth};
     pub use crate::client::{ClientBuilder, ServiceNowClient};
     pub use crate::error::{Error, Result};
-    pub use crate::model::{DisplayValue, FieldValue, JournalEntry, QueryResult, Record};
+    pub use crate::model::{DisplayValue, FieldValue, JournalEntry, QueryResult, Record, parse_servicenow_timestamp};
     pub use crate::prefix::PrefixRegistry;
     pub use crate::query::{FetchStrategy, Operator, Order, Paginator};
     pub use crate::schema::SchemaRegistry;
