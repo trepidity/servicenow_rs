@@ -111,7 +111,10 @@ async fn test_graphql_table_query_executes_when_preferred() {
 
     assert_eq!(result.records.len(), 1);
     assert_eq!(result.records[0].get_str("number"), Some("CTASK001"));
-    assert_eq!(client.transport_selection().preferred, servicenow_rs::transport::TransportMode::Graphql);
+    assert_eq!(
+        client.transport_selection().preferred,
+        servicenow_rs::transport::TransportMode::Graphql
+    );
 }
 
 #[tokio::test]
@@ -2456,13 +2459,14 @@ async fn test_approve_change_request() {
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "sysapproval=chg_sys_id^approver=user_sys_id^state=requested",
+            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
         ))
         .and(query_param("sysparm_limit", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": [
                 {
                     "sys_id": "appr_sys_id",
+                    "document_id": "chg_sys_id",
                     "sysapproval": "chg_sys_id",
                     "approver": "user_sys_id",
                     "state": "requested",
@@ -2521,12 +2525,13 @@ async fn test_reject_change_request() {
         .and(path("/api/now/table/sysapproval_approver"))
         .and(query_param(
             "sysparm_query",
-            "sysapproval=chg_sys_id^approver=user_sys_id^state=requested",
+            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": [
                 {
                     "sys_id": "appr_sys_id",
+                    "document_id": "chg_sys_id",
                     "sysapproval": "chg_sys_id",
                     "approver": "user_sys_id",
                     "state": "requested",
@@ -2578,9 +2583,27 @@ async fn test_reject_change_request() {
 async fn test_approve_no_pending_approval() {
     let server = MockServer::start().await;
 
-    // Return empty result — no pending approval found.
+    // Return empty results for both the preferred document_id lookup and the
+    // sysapproval fallback.
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "document_id=chg_sys_id^approver=wrong_user_sys_id^state=requested",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "sysapproval=chg_sys_id^approver=wrong_user_sys_id^state=requested",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": []
         })))
@@ -2614,9 +2637,14 @@ async fn test_approve_without_comment() {
     // Lookup mock.
     Mock::given(method("GET"))
         .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "result": [{
                 "sys_id": "appr_sys_id",
+                "document_id": "chg_sys_id",
                 "sysapproval": "chg_sys_id",
                 "approver": "user_sys_id",
                 "state": "requested",
@@ -2655,6 +2683,74 @@ async fn test_approve_without_comment() {
         .execute()
         .await
         .expect("approve without comment failed");
+
+    assert_eq!(approval.get_str("state"), Some("Approved"));
+}
+
+#[tokio::test]
+async fn test_approve_falls_back_to_sysapproval_lookup() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "document_id=chg_sys_id^approver=user_sys_id^state=requested",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sysapproval_approver"))
+        .and(query_param(
+            "sysparm_query",
+            "sysapproval=chg_sys_id^approver=user_sys_id^state=requested",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [{
+                "sys_id": "appr_sys_id",
+                "sysapproval": "chg_sys_id",
+                "approver": "user_sys_id",
+                "state": "requested",
+                "source_table": "change_request",
+                "comments": ""
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/now/table/sysapproval_approver/appr_sys_id"))
+        .and(wiremock::matchers::body_json(
+            json!({ "state": "approved" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": {
+                "sys_id": "appr_sys_id",
+                "sysapproval": "CHG0010001",
+                "approver": "Test User",
+                "state": "Approved",
+                "source_table": "change_request",
+                "comments": "",
+                "sys_updated_on": "2026-03-27 17:30:00"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+
+    let approval = client
+        .approve("change_request", "chg_sys_id", "user_sys_id")
+        .execute()
+        .await
+        .expect("approve fallback failed");
 
     assert_eq!(approval.get_str("state"), Some("Approved"));
 }

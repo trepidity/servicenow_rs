@@ -103,7 +103,9 @@ impl GraphqlTransport {
             .map(|fields| fields.len())
             .unwrap_or(0);
 
-        if query_size >= threshold || self.http.selection().preferred == super::TransportMode::Graphql {
+        if query_size >= threshold
+            || self.http.selection().preferred == super::TransportMode::Graphql
+        {
             Ok(Some(operation))
         } else {
             Ok(None)

@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use std::collections::HashMap;
 
 use url::Url;
 
@@ -18,8 +18,10 @@ use crate::prefix::PrefixRegistry;
 use crate::query::builder::{validate_identifier, TableApi};
 use crate::query::filter::Order;
 use crate::schema::registry::SchemaRegistry;
-use crate::transport::{GraphqlTransport, HttpTransport, Transport, TransportMode, TransportSelection};
 use crate::transport::retry::{RateLimiter, RetryConfig};
+use crate::transport::{
+    GraphqlTransport, HttpTransport, Transport, TransportMode, TransportSelection,
+};
 
 /// The primary client for interacting with a ServiceNow instance.
 ///
@@ -409,8 +411,7 @@ impl ServiceNowClient {
         &self,
         ritm_sys_id: &str,
     ) -> Result<Vec<crate::api::catalog::CatalogVariable>> {
-        crate::api::catalog::fetch_catalog_variables(Arc::clone(&self.transport), ritm_sys_id)
-            .await
+        crate::api::catalog::fetch_catalog_variables(Arc::clone(&self.transport), ritm_sys_id).await
     }
 
     /// Resolve reference and list collector values in catalog variables to
@@ -450,7 +451,10 @@ impl ServiceNowClient {
                 for id in var.value.split(',') {
                     let id = id.trim();
                     if is_sys_id(id) {
-                        table_ids.entry(table.clone()).or_default().push(id.to_string());
+                        table_ids
+                            .entry(table.clone())
+                            .or_default()
+                            .push(id.to_string());
                     }
                 }
             }
@@ -500,10 +504,7 @@ impl ServiceNowClient {
                         .iter()
                         .map(|id| {
                             let id = id.trim();
-                            name_map
-                                .get(id)
-                                .cloned()
-                                .unwrap_or_else(|| id.to_string())
+                            name_map.get(id).cloned().unwrap_or_else(|| id.to_string())
                         })
                         .collect();
                     var.value = resolved.join(", ");

@@ -73,7 +73,9 @@ pub fn parse_journal(blob: &str) -> Vec<JournalEntry> {
     entries
 }
 
-fn finish_entry((ts, author, source, body_lines): (String, String, String, Vec<&str>)) -> JournalEntry {
+fn finish_entry(
+    (ts, author, source, body_lines): (String, String, String, Vec<&str>),
+) -> JournalEntry {
     JournalEntry {
         timestamp: ts,
         author,
@@ -101,7 +103,11 @@ fn parse_header(line: &str) -> Option<(String, String, String)> {
     // Use first '(' to split — source type may contain nested parens
     let paren_pos = rest.find('(')?;
     let author = rest[..paren_pos].trim().to_string();
-    let source = rest[paren_pos + 1..].strip_suffix(')').unwrap_or(&rest[paren_pos + 1..]).trim().to_string();
+    let source = rest[paren_pos + 1..]
+        .strip_suffix(')')
+        .unwrap_or(&rest[paren_pos + 1..])
+        .trim()
+        .to_string();
     Some((ts.to_string(), author, source))
 }
 
@@ -111,7 +117,8 @@ mod tests {
 
     #[test]
     fn test_parse_single_entry() {
-        let blob = "2026-04-03 14:53:01 - Conor Coleman (Additional Comments (Public))\nHello world\n";
+        let blob =
+            "2026-04-03 14:53:01 - Conor Coleman (Additional Comments (Public))\nHello world\n";
         let entries = parse_journal(blob);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].timestamp, "2026-04-03 14:53:01");
@@ -152,7 +159,8 @@ Internal note
 
     #[test]
     fn test_multiline_body() {
-        let blob = "2026-04-03 14:53:01 - User (Additional Comments (Public))\nLine 1\nLine 2\nLine 3\n";
+        let blob =
+            "2026-04-03 14:53:01 - User (Additional Comments (Public))\nLine 1\nLine 2\nLine 3\n";
         let entries = parse_journal(blob);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].body, "Line 1\nLine 2\nLine 3");

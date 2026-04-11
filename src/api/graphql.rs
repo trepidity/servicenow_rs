@@ -69,10 +69,11 @@ impl GraphqlOperation {
                 "sysparm_fields" => fields = split_csv(value),
                 "sysparm_display_value" => display_value = value.clone(),
                 "sysparm_exclude_reference_link" => exclude_reference_link = value == "true",
-                unsupported if unsupported == "sysparm_query"
-                    || unsupported == "sysparm_limit"
-                    || unsupported == "sysparm_offset"
-                    || unsupported == "sysparm_no_count" =>
+                unsupported
+                    if unsupported == "sysparm_query"
+                        || unsupported == "sysparm_limit"
+                        || unsupported == "sysparm_offset"
+                        || unsupported == "sysparm_no_count" =>
                 {
                     return Ok(None);
                 }
@@ -170,16 +171,17 @@ impl GraphqlOperation {
     }
 
     pub fn extract_result(&self, data: &Value) -> Result<Value> {
-        let table = data
-            .get("table")
-            .ok_or_else(|| Error::Api {
-                status: 200,
-                message: "missing `table` in GraphQL response".to_string(),
-                detail: Some(data.to_string()),
-            })?;
+        let table = data.get("table").ok_or_else(|| Error::Api {
+            status: 200,
+            message: "missing `table` in GraphQL response".to_string(),
+            detail: Some(data.to_string()),
+        })?;
 
         match self {
-            Self::TableList { .. } => Ok(table.get("records").cloned().unwrap_or(Value::Array(vec![]))),
+            Self::TableList { .. } => Ok(table
+                .get("records")
+                .cloned()
+                .unwrap_or(Value::Array(vec![]))),
             Self::TableGet { .. } => table.get("record").cloned().ok_or_else(|| Error::Api {
                 status: 200,
                 message: "missing `record` in GraphQL response".to_string(),
@@ -207,7 +209,10 @@ mod tests {
         let operation = GraphqlOperation::from_table_list(
             "/api/now/table/change_task",
             &[
-                ("sysparm_query".to_string(), "change_request=abc".to_string()),
+                (
+                    "sysparm_query".to_string(),
+                    "change_request=abc".to_string(),
+                ),
                 ("sysparm_fields".to_string(), "sys_id,number".to_string()),
                 ("sysparm_limit".to_string(), "25".to_string()),
             ],
@@ -216,7 +221,12 @@ mod tests {
         .expect("supported");
 
         match operation {
-            GraphqlOperation::TableList { table, limit, fields, .. } => {
+            GraphqlOperation::TableList {
+                table,
+                limit,
+                fields,
+                ..
+            } => {
                 assert_eq!(table, "change_task");
                 assert_eq!(limit, Some(25));
                 assert_eq!(fields, vec!["sys_id".to_string(), "number".to_string()]);

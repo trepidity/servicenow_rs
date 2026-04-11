@@ -51,7 +51,9 @@ pub(crate) async fn fetch_catalog_variables(
         .equals("request_item", ritm_sys_id);
     let mtom = mtom_api.execute().await?;
 
-    let opt_ids: Vec<&str> = mtom.records.iter()
+    let opt_ids: Vec<&str> = mtom
+        .records
+        .iter()
         .filter_map(|r| r.get_str("sc_item_option"))
         .collect();
     if opt_ids.is_empty() {
@@ -68,7 +70,9 @@ pub(crate) async fn fetch_catalog_variables(
     let opts = opts_api.execute().await?;
 
     // Collect unique variable-definition sys_ids for the metadata lookup
-    let mut var_def_ids: Vec<&str> = opts.records.iter()
+    let mut var_def_ids: Vec<&str> = opts
+        .records
+        .iter()
         .filter_map(|r| r.get_raw("item_option_new"))
         .filter(|s| !s.is_empty())
         .collect();
@@ -89,9 +93,11 @@ pub(crate) async fn fetch_catalog_variables(
             .execute()
             .await?;
 
-        defs.records.iter()
+        defs.records
+            .iter()
             .filter_map(|r| {
-                let ref_table = r.get_str("reference")
+                let ref_table = r
+                    .get_str("reference")
                     .filter(|s| !s.is_empty())
                     .or_else(|| r.get_str("list_table").filter(|s| !s.is_empty()))?;
                 Some((r.sys_id.clone(), ref_table.to_string()))
@@ -102,18 +108,29 @@ pub(crate) async fn fetch_catalog_variables(
     };
 
     // Build variables, attaching reference_table when the definition has one
-    let mut variables: Vec<CatalogVariable> = opts.records.iter()
+    let mut variables: Vec<CatalogVariable> = opts
+        .records
+        .iter()
         .filter_map(|r| {
             let name = r.get_str("item_option_new")?.to_string();
             if name.is_empty() {
                 return None;
             }
             let value = r.get_str("value").unwrap_or_default().to_string();
-            let order: u32 = r.get_str("order").and_then(|o| o.parse().ok()).unwrap_or(999);
-            let reference_table = r.get_raw("item_option_new")
+            let order: u32 = r
+                .get_str("order")
+                .and_then(|o| o.parse().ok())
+                .unwrap_or(999);
+            let reference_table = r
+                .get_raw("item_option_new")
                 .and_then(|id| ref_map.get(id))
                 .cloned();
-            Some(CatalogVariable { name, value, order, reference_table })
+            Some(CatalogVariable {
+                name,
+                value,
+                order,
+                reference_table,
+            })
         })
         .collect();
     variables.sort_by_key(|v| v.order);

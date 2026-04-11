@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::error::Result;
 
-pub mod http;
 pub mod graphql;
+pub mod http;
 pub mod response;
 pub mod retry;
 
@@ -63,11 +63,7 @@ impl TransportSelection {
 /// Shared async transport interface used by the client and query builders.
 #[async_trait]
 pub trait Transport: Send + Sync + std::fmt::Debug {
-    async fn get(
-        &self,
-        path: &str,
-        params: &[(String, String)],
-    ) -> Result<ServiceNowResponse>;
+    async fn get(&self, path: &str, params: &[(String, String)]) -> Result<ServiceNowResponse>;
 
     async fn post(&self, path: &str, body: Value) -> Result<ServiceNowResponse>;
 

@@ -110,42 +110,61 @@ impl ApprovalBuilder {
             "looking up pending approval"
         );
 
-        // Step 1: Find the pending approval record.
         let path = format!("{}/sysapproval_approver", crate::api::table::TABLE_API_PATH);
-        let query = format!(
-            "sysapproval={}^approver={}^state=requested",
-            self.record_sys_id, self.approver_sys_id
-        );
-        let params = vec![
-            ("sysparm_query".to_string(), query),
-            (
-                "sysparm_fields".to_string(),
-                "sys_id,sysapproval,approver,state,source_table,comments".to_string(),
+        // Step 1: Find the pending approval record. Prefer document_id because
+        // that matches how sysapproval_approver is queried elsewhere in the CLI,
+        // but fall back to sysapproval for older instances.
+        let lookup_queries = [
+            format!(
+                "document_id={}^approver={}^state=requested",
+                self.record_sys_id, self.approver_sys_id
             ),
-            ("sysparm_display_value".to_string(), "false".to_string()),
-            ("sysparm_limit".to_string(), "1".to_string()),
+            format!(
+                "sysapproval={}^approver={}^state=requested",
+                self.record_sys_id, self.approver_sys_id
+            ),
         ];
+        let approval_sys_id = {
+            let mut match_id = None;
+            for query in lookup_queries {
+                let params = vec![
+                    ("sysparm_query".to_string(), query.clone()),
+                    (
+                        "sysparm_fields".to_string(),
+                        "sys_id,document_id,sysapproval,approver,state,source_table,comments"
+                            .to_string(),
+                    ),
+                    ("sysparm_display_value".to_string(), "false".to_string()),
+                    ("sysparm_limit".to_string(), "1".to_string()),
+                ];
 
-        let response = self.transport.get(&path, &params).await?;
+                debug!(query = query, "querying pending approval");
 
-        // Parse the result to find the approval sys_id.
-        let approval_sys_id = response
-            .result
-            .as_array()
-            .and_then(|arr| arr.first())
-            .and_then(|r| r.get("sys_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .ok_or_else(|| Error::Api {
-                status: 404,
-                message: format!(
-                    "no pending approval found for {} {} with approver {}",
-                    self.source_table, self.record_sys_id, self.approver_sys_id
-                ),
-                detail: Some(
-                    "verify the record has a pending approval assigned to this user".to_string(),
-                ),
-            })?;
+                let response = self.transport.get(&path, &params).await?;
+                match_id = response
+                    .result
+                    .as_array()
+                    .and_then(|arr| arr.first())
+                    .and_then(|r| r.get("sys_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+
+                if match_id.is_some() {
+                    break;
+                }
+            }
+            match_id
+        }
+        .ok_or_else(|| Error::Api {
+            status: 404,
+            message: format!(
+                "no pending approval found for {} {} with approver {}",
+                self.source_table, self.record_sys_id, self.approver_sys_id
+            ),
+            detail: Some(
+                "verify the record has a pending approval assigned to this user".to_string(),
+            ),
+        })?;
 
         debug!(
             approval_sys_id = approval_sys_id,
