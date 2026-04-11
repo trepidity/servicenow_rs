@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 
 /// Parsed response from the ServiceNow API.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ServiceNowResponse {
     /// HTTP status code.
     pub status: u16,
