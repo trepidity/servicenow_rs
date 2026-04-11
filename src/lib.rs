@@ -65,4 +65,8 @@ pub mod prelude {
     pub use crate::prefix::PrefixRegistry;
     pub use crate::query::{FetchStrategy, Operator, Order, Paginator};
     pub use crate::schema::SchemaRegistry;
+    pub use crate::schema::{
+        child_relation_for_table, parent_reference_field, reference_default_table,
+        reference_fields_for_table,
+    };
 }
