@@ -52,6 +52,7 @@ pub struct Paginator {
 
 impl Paginator {
     /// Create a new paginator. Called internally by `TableApi::paginate()`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         transport: TransportHandle,
         table: String,
