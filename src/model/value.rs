@@ -129,7 +129,9 @@ pub fn parse_servicenow_timestamp(value: Option<&str>) -> Option<chrono::DateTim
         .or_else(|| {
             chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
                 .ok()
-                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+                .map(|dt| {
+                    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)
+                })
         })
 }
 
