@@ -935,6 +935,69 @@ async fn test_pagination() {
 }
 
 #[tokio::test]
+async fn test_pagination_follows_link_header_for_short_pages() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "0"))
+        .and(query_param("sysparm_limit", "2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "3")
+                .append_header(
+                    "Link",
+                    format!(
+                        "<{}/api/now/table/incident?sysparm_limit=2&sysparm_offset=0>;rel=\"first\",<{}/api/now/table/incident?sysparm_limit=2&sysparm_offset=2>;rel=\"next\",<{}/api/now/table/incident?sysparm_limit=2&sysparm_offset=2>;rel=\"last\"",
+                        server.uri(),
+                        server.uri(),
+                        server.uri()
+                    ),
+                )
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a1", "number": "INC001" }
+                    ]
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_offset", "2"))
+        .and(query_param("sysparm_limit", "2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("X-Total-Count", "3")
+                .set_body_json(json!({
+                    "result": [
+                        { "sys_id": "a2", "number": "INC002" }
+                    ]
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let mut paginator = client.table("incident").limit(2).paginate().unwrap();
+
+    let page1 = paginator.next_page().await.unwrap().unwrap();
+    assert_eq!(page1.len(), 1);
+    assert_eq!(paginator.current_offset(), 2);
+    assert!(!paginator.is_done());
+
+    let page2 = paginator.next_page().await.unwrap().unwrap();
+    assert_eq!(page2.len(), 1);
+    assert!(paginator.is_done());
+
+    let page3 = paginator.next_page().await.unwrap();
+    assert!(page3.is_none());
+}
+
+#[tokio::test]
 async fn test_pagination_with_offset() {
     let server = MockServer::start().await;
 

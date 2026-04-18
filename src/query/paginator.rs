@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use url::Url;
 
 use serde_json::Value;
 use tracing::debug;
@@ -110,6 +111,12 @@ impl Paginator {
         }
 
         // Parse records.
+        let raw_count = match &response.result {
+            Value::Array(arr) => arr.len() as u32,
+            _ => 0,
+        };
+        let next_offset = response.links.next.as_deref().and_then(parse_next_offset);
+
         let mut records: Vec<Record> = match response.result {
             Value::Array(arr) => arr
                 .iter()
@@ -119,24 +126,26 @@ impl Paginator {
         };
         let errors = self.fetch_related(&mut records).await;
 
-        let count = records.len() as u32;
-
         // Advance offset.
-        self.current_offset += count;
+        if let Some(offset) = next_offset {
+            self.current_offset = offset;
+        } else {
+            self.current_offset += raw_count;
+        }
 
         // Check if we've reached the end.
-        if count < self.page_size {
-            self.done = true;
-        }
-        if let Some(total) = self.total_count {
-            if self.current_offset as u64 >= total {
-                self.done = true;
-            }
-        }
-        if count == 0 {
+        if raw_count == 0 {
             self.done = true;
             return Ok(None);
         }
+
+        self.done = if response.links.has_next() {
+            false
+        } else if let Some(total) = self.total_count {
+            self.current_offset as u64 >= total
+        } else {
+            raw_count < self.page_size
+        };
 
         Ok(Some(QueryResult {
             records,
@@ -230,4 +239,11 @@ impl Paginator {
         errors.extend(missing_errors);
         errors
     }
+}
+
+fn parse_next_offset(next_url: &str) -> Option<u32> {
+    let url = Url::parse(next_url).ok()?;
+    url.query_pairs()
+        .find(|(key, _)| key == "sysparm_offset")
+        .and_then(|(_, value)| value.parse::<u32>().ok())
 }
