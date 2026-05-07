@@ -614,6 +614,30 @@ The `TableApi` shorthand methods (`.equals()`, `.contains()`, etc.) push `Condit
 
 Task SLA support is read-only and uses ServiceNow's SLA Engine output from `task_sla`. The crate must not calculate breach windows, pause duration, schedules, or business elapsed time locally.
 
+### v0.4.0 Public Surface
+
+The consumer-facing v0.4.0 surface is:
+
+| Item | Purpose |
+|---|---|
+| `TaskSla` | Typed view of one `task_sla` row plus the raw `Record` |
+| `TaskSlaStage` | Permissive stage enum with `Other(String)` for custom values |
+| `TaskSlaSummary` | Pure Rust summary over a caller-provided `&[TaskSla]` |
+| `ServiceNowClient::task_slas(task_sys_id)` | Customizable `TableApi` over one task's Task SLA rows |
+| `ServiceNowClient::task_slas_for_number(number)` | Resolve a task-like number, then return all typed Task SLA rows |
+| `ServiceNowClient::task_slas_for_tasks(task_sys_ids)` | Bulk typed helper for raw task sys_ids |
+| `TASK_SLA_TABLE` | Runtime table name used by the helpers: `task_sla` |
+| `TASK_SLA_DEFAULT_FIELDS` | Default Task SLA projection requested by the helpers |
+| `TASK_SLA_BULK_CHUNK_SIZE` | Default bulk `IN` query chunk size, currently 100 task ids |
+| `TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS` | Default bulk concurrency cap, currently 4 chunks in flight |
+
+The v0.4.0 consumer pin stanza is:
+
+```toml
+[dependencies]
+servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.4.0" }
+```
+
 ### Public Query Plan
 
 There are three intended entry points:
@@ -621,7 +645,7 @@ There are three intended entry points:
 | Method | Intended use | Query shape |
 |---|---|---|
 | `task_slas(task_sys_id)` | One task when the caller wants a customizable `TableApi` | `task_sla` with `task=<sys_id>`, default projection, `DisplayValue::Both`, no preset ordering, and no `no_count()` |
-| `task_slas_for_number(number)` | One incident/task number | Resolve parent through `get_by_number()`, then delegate to `task_slas_for_tasks(&[sys_id])` |
+| `task_slas_for_number(number)` | One incident/task number | Resolve parent through `get_by_number()`, return an empty vector if the parent is not readable, then delegate to `task_slas_for_tasks(&[sys_id])` |
 | `task_slas_for_tasks(task_sys_ids)` | Reports and bulk workflows | Deduplicate ids, prepopulate every requested id, query `task IN (...)` chunks, drain pagination, group by raw `task` sys_id |
 
 The default Task SLA projection is:
@@ -646,7 +670,7 @@ Do not add typed Task SLA fields that are absent from the captured dictionary. U
 
 ### ACL Caveat
 
-`task_sla` can be ACL-restricted. A successful empty response can mean "no Task SLAs" or "the integration user cannot read Task SLAs." The helpers preserve empty results instead of converting them to errors. Live read-only tests should print an ACL note when zero rows are returned.
+`task_sla` can be ACL-restricted. An empty result may indicate no attached SLAs or an ACL-restricted `task_sla` table; the crate does not distinguish. The helpers preserve empty results instead of converting them to errors. Live read-only tests should print an ACL note when zero rows are returned.
 
 ### Raw And Display Values
 
@@ -658,8 +682,8 @@ Task SLA helpers use `DisplayValue::Both` because typed parsing and grouping nee
 
 | Default | Value |
 |---|---|
-| Task ids per `IN` query | 100 |
-| Max concurrent chunks | 4 |
+| `TASK_SLA_BULK_CHUNK_SIZE` / task ids per `IN` query | 100 |
+| `TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS` / max concurrent chunks | 4 |
 | Bulk count behavior | `sysparm_no_count=true` |
 | Pagination | Drain pages with `Paginator::collect_all()` |
 

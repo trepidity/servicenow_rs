@@ -250,8 +250,8 @@ impl ServiceNowClient {
     ///
     /// # Permissions
     ///
-    /// `task_sla` can be ACL-restricted. Empty successful responses can mean
-    /// the task has no Task SLAs or that the integration user cannot read them.
+    /// An empty result may indicate no attached SLAs or an ACL-restricted
+    /// `task_sla` table; the crate does not distinguish.
     pub fn task_slas(&self, task_sys_id: &str) -> TableApi {
         self.table(TASK_SLA_TABLE)
             .equals("task", task_sys_id)
@@ -266,8 +266,8 @@ impl ServiceNowClient {
     /// vector. Returned rows use the same grouping and ordering policy as
     /// [`task_slas_for_tasks`](Self::task_slas_for_tasks).
     ///
-    /// Empty results can mean no Task SLA rows or insufficient `task_sla` read
-    /// access.
+    /// An empty result may indicate no attached SLAs or an ACL-restricted
+    /// `task_sla` table; the crate does not distinguish.
     pub async fn task_slas_for_number(&self, number: &str) -> Result<Vec<TaskSla>> {
         let Some(record) = self.get_by_number(number).await? else {
             return Ok(Vec::new());
@@ -291,8 +291,8 @@ impl ServiceNowClient {
     /// sort first, then known-unbreached rows, then ascending non-empty
     /// `planned_end_time`.
     ///
-    /// Empty vectors can mean no Task SLA rows or insufficient `task_sla` read
-    /// access.
+    /// An empty result may indicate no attached SLAs or an ACL-restricted
+    /// `task_sla` table; the crate does not distinguish.
     pub async fn task_slas_for_tasks(
         &self,
         task_sys_ids: &[&str],

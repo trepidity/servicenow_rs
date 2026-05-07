@@ -20,11 +20,12 @@ Provides a typed, builder-based interface to the ServiceNow Table API and Aggreg
 
 ## Installation
 
-Add to your `Cargo.toml`:
+For the v0.4.0 Task SLA API, downstream consumers should pin the repository
+tag until crates.io publication is decided:
 
 ```toml
 [dependencies]
-servicenow_rs = "0.2.1"
+servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.4.0" }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 ```
@@ -123,6 +124,47 @@ let client = ServiceNowClient::builder()
 
 Task SLA helpers read ServiceNow's SLA Engine output from `task_sla`. They do not recompute schedules, pause windows, or breach times locally.
 
+The v0.4.0 public Task SLA surface includes:
+
+```rust
+use servicenow_rs::client::{
+    TASK_SLA_BULK_CHUNK_SIZE, TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS,
+    TASK_SLA_DEFAULT_FIELDS, TASK_SLA_TABLE,
+};
+use servicenow_rs::prelude::{
+    ServiceNowClient, TaskSla, TaskSlaStage, TaskSlaSummary,
+};
+
+// TaskSla preserves the raw Record and typed fields:
+// record, sys_id, task_sys_id, sla_sys_id, sla_name, stage, active,
+// has_breached, start_time, end_time, planned_end_time,
+// original_breach_time, actual_elapsed_percentage, actual_time_left,
+// business_elapsed_percentage, business_time_left, business_duration,
+// duration, schedule_sys_id.
+
+// ServiceNowClient methods:
+// client.task_slas(task_sys_id) -> TableApi
+// client.task_slas_for_number(number) -> Result<Vec<TaskSla>>
+// client.task_slas_for_tasks(task_sys_ids) -> Result<HashMap<String, Vec<TaskSla>>>
+
+// Bulk defaults:
+// TASK_SLA_BULK_CHUNK_SIZE == 100
+// TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS == 4
+
+// Lower-level query metadata:
+// TASK_SLA_TABLE == "task_sla"
+// TASK_SLA_DEFAULT_FIELDS is the default projection used by the helpers.
+```
+
+`TaskSlaStage` is permissive: known values map to `InProgress`, `Paused`,
+`Completed`, and `Cancelled`, while unknown non-empty values are preserved in
+`Other(String)`. `TaskSlaSummary::from_task_slas()` computes totals, active and
+breached counts, the next active unbreached planned breach, and the highest
+business elapsed percentage from the rows you pass in.
+
+An empty result may indicate no attached SLAs or an ACL-restricted `task_sla`
+table; the crate does not distinguish.
+
 For a single incident or task number, use `task_slas_for_number()`:
 
 ```rust
@@ -143,7 +185,7 @@ for sla in &slas {
 }
 ```
 
-`task_slas_for_number()` first resolves the parent record with `get_by_number()`, then queries Task SLA rows by the parent `sys_id`. Empty results can mean either no Task SLAs exist or the API user lacks read access to `task_sla`.
+`task_slas_for_number()` first resolves the parent record with `get_by_number()`, then queries Task SLA rows by the parent `sys_id`. If the parent number resolves to no readable record, it returns an empty vector. Otherwise, an empty result may indicate no attached SLAs or an ACL-restricted `task_sla` table; the crate does not distinguish.
 
 For reports or large parent sets, avoid calling the single-record helper in a loop. Use `task_slas_for_tasks()` with raw task sys_ids:
 
@@ -157,7 +199,7 @@ for task_id in &task_ids {
 }
 ```
 
-The bulk helper deduplicates task ids, prepopulates every requested id with an empty vector, chunks `task_sla` `IN` queries at 100 ids, and runs at most 4 chunks concurrently. Results are grouped by the raw `task` sys_id. The helpers request `DisplayValue::Both`: raw values drive parsing and grouping, while display values such as `sla_name` are for humans.
+The bulk helper deduplicates task ids, prepopulates every requested id with an empty vector, chunks `task_sla` `IN` queries at `TASK_SLA_BULK_CHUNK_SIZE` (100) ids, and runs at most `TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS` (4) chunks concurrently. Results are grouped by the raw `task` sys_id. The helpers request `DisplayValue::Both`: raw values drive parsing and grouping, while display values such as `sla_name` are for humans. An empty result may indicate no attached SLAs or an ACL-restricted `task_sla` table; the crate does not distinguish.
 
 ### Create a Record
 

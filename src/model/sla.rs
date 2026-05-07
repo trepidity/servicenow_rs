@@ -166,9 +166,9 @@ impl TaskSlaStage {
 
 /// A pure Rust summary of a set of Task SLA rows.
 ///
-/// The summary only describes rows the caller passed in. An empty summary can
-/// mean the task has no Task SLAs, or that the integration user has no readable
-/// `task_sla` rows due to ServiceNow ACLs.
+/// The summary only describes rows the caller passed in. An empty result may
+/// indicate no attached SLAs or an ACL-restricted `task_sla` table; the crate
+/// does not distinguish.
 #[derive(Debug, Clone)]
 pub struct TaskSlaSummary {
     /// Number of Task SLA rows included in the summary.
@@ -403,6 +403,35 @@ mod tests {
     }
 
     #[test]
+    fn stage_parser_accepts_common_aliases_and_preserves_custom_values() {
+        assert_eq!(
+            TaskSlaStage::from_service_now("In Progress"),
+            Some(TaskSlaStage::InProgress)
+        );
+        assert_eq!(
+            TaskSlaStage::from_service_now("in-progress"),
+            Some(TaskSlaStage::InProgress)
+        );
+        assert_eq!(
+            TaskSlaStage::from_service_now("pause"),
+            Some(TaskSlaStage::Paused)
+        );
+        assert_eq!(
+            TaskSlaStage::from_service_now("complete"),
+            Some(TaskSlaStage::Completed)
+        );
+        assert_eq!(
+            TaskSlaStage::from_service_now("canceled"),
+            Some(TaskSlaStage::Cancelled)
+        );
+        assert_eq!(TaskSlaStage::from_service_now("   "), None);
+        assert_eq!(
+            TaskSlaStage::from_service_now("Awaiting Vendor"),
+            Some(TaskSlaStage::Other("Awaiting Vendor".to_string()))
+        );
+    }
+
+    #[test]
     fn summary_counts_and_selects_next_breach() {
         let slas = vec![
             task_sla(
@@ -449,6 +478,43 @@ mod tests {
             Some("next")
         );
         assert_eq!(summary.highest_business_elapsed_percentage, Some(99.0));
+    }
+
+    #[test]
+    fn summary_handles_empty_and_excludes_rows_without_actionable_breach_time() {
+        let empty = TaskSlaSummary::from_task_slas(&[]);
+        assert_eq!(empty.total, 0);
+        assert_eq!(empty.active, 0);
+        assert_eq!(empty.breached, 0);
+        assert!(empty.next_breach.is_none());
+        assert_eq!(empty.highest_business_elapsed_percentage, None);
+
+        let slas = vec![
+            task_sla("no-planned-end", true, false, "in_progress", "", 10.0),
+            task_sla(
+                "cancelled",
+                true,
+                false,
+                "cancelled",
+                "2026-05-06 08:00:00",
+                20.0,
+            ),
+            task_sla(
+                "candidate",
+                true,
+                false,
+                "paused",
+                "2026-05-06 09:00:00",
+                30.0,
+            ),
+        ];
+
+        let summary = TaskSlaSummary::from_task_slas(&slas);
+        assert_eq!(
+            summary.next_breach.as_ref().map(|sla| sla.sys_id.as_str()),
+            Some("candidate")
+        );
+        assert_eq!(summary.highest_business_elapsed_percentage, Some(30.0));
     }
 
     fn task_sla(
