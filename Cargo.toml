@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/trepidity/servicenow_rs"
 
 [dependencies]
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "charset", "http2", "system-proxy"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,6 +25,10 @@ tokio = { version = "1", features = ["full", "test-util"] }
 wiremock = "0.6"
 tempfile = "3"
 
-# Feature flags will be activated when the corresponding APIs are
-# gated behind conditional compilation (e.g., codegen, aggregate_api).
-# For now, all features are included by default.
+[features]
+default = ["native-tls"]
+native-tls = ["reqwest/default-tls"]
+native-tls-vendored = ["reqwest/native-tls-vendored"]
+rustls-tls = ["reqwest/rustls-tls-native-roots"]
+rustls-tls-native-roots = ["rustls-tls"]
+rustls-tls-webpki-roots = ["reqwest/rustls-tls-webpki-roots"]

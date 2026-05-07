@@ -16,7 +16,7 @@ Provides a typed, builder-based interface to the ServiceNow Table API and Aggreg
 - **Layered configuration** -- builder methods, environment variables, TOML config file, with clear precedence
 - **Multiple auth methods** -- Basic auth and Bearer token auth, with a trait for custom implementations
 - **Transport resilience** -- automatic retry with exponential backoff, rate limiting, session cookie reuse
-- **Feature flags** -- `table_api` (default) and `codegen`
+- **Feature flags** -- TLS backend selection for native-tls or rustls builds
 
 ## Installation
 
@@ -28,6 +28,27 @@ servicenow_rs = "0.2.1"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 ```
+
+By default, `servicenow_rs` uses reqwest's native-tls backend, preserving the
+standard reqwest 0.12 behavior. To build with rustls instead, disable default
+features and enable one rustls backend:
+
+```toml
+[dependencies]
+servicenow_rs = { version = "0.2.1", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+```
+
+Available TLS features:
+
+| Feature | Description |
+|---|---|
+| `native-tls` | Default. Uses reqwest's native-tls backend. |
+| `native-tls-vendored` | Uses native-tls with vendored OpenSSL where supported. |
+| `rustls-tls` | Uses rustls with native root certificates. |
+| `rustls-tls-native-roots` | Alias for `rustls-tls`. |
+| `rustls-tls-webpki-roots` | Uses rustls with bundled webpki roots. |
 
 ## Quick Start
 
@@ -956,8 +977,11 @@ for record in &result {
 
 | Feature | Default | Description |
 |---|---|---|
-| `table_api` | Yes | Table API support (query, CRUD, pagination) |
-| `codegen` | No | Code generation for typed table structs (future) |
+| `native-tls` | Yes | Uses reqwest's native-tls backend. |
+| `native-tls-vendored` | No | Uses native-tls with vendored OpenSSL where supported. |
+| `rustls-tls` | No | Uses rustls with native root certificates. |
+| `rustls-tls-native-roots` | No | Alias for `rustls-tls`. |
+| `rustls-tls-webpki-roots` | No | Uses rustls with bundled webpki roots. |
 
 ## Contributing
 
