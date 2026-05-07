@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt, TryStreamExt};
 use url::Url;
 
 use crate::api::aggregate::AggregateApi;
@@ -13,8 +14,10 @@ use crate::auth::Authenticator;
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
 use crate::model::record::Record;
+use crate::model::sla::{compare_planned_end_time, TaskSla};
 use crate::model::value::DisplayValue;
 use crate::prefix::PrefixRegistry;
+use crate::query::batch::{RELATED_QUERY_CHUNK_SIZE, RELATED_QUERY_MAX_CONCURRENCY};
 use crate::query::builder::{validate_identifier, TableApi};
 use crate::query::filter::Order;
 use crate::schema::registry::SchemaRegistry;
@@ -54,6 +57,36 @@ pub struct ServiceNowClient {
     prefix_registry: PrefixRegistry,
     base_url: String,
 }
+
+/// ServiceNow runtime table containing SLA Engine rows attached to tasks.
+pub const TASK_SLA_TABLE: &str = "task_sla";
+
+/// Default field projection used by Task SLA helpers.
+pub const TASK_SLA_DEFAULT_FIELDS: &[&str] = &[
+    "sys_id",
+    "task",
+    "sla",
+    "stage",
+    "active",
+    "has_breached",
+    "start_time",
+    "end_time",
+    "planned_end_time",
+    "original_breach_time",
+    "percentage",
+    "time_left",
+    "business_percentage",
+    "business_time_left",
+    "business_duration",
+    "duration",
+    "schedule",
+];
+
+/// Number of task sys_ids included in each bulk Task SLA query chunk.
+pub const TASK_SLA_BULK_CHUNK_SIZE: usize = 100;
+
+/// Maximum number of bulk Task SLA query chunks fetched concurrently.
+pub const TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS: usize = 4;
 
 impl ServiceNowClient {
     /// Create a new client builder.
@@ -204,6 +237,124 @@ impl ServiceNowClient {
         self.table(table).equals("number", number).first().await
     }
 
+    // ── Task SLA Reading ───────────────────────────────────────────
+
+    /// Build a read-only query for Task SLA rows attached to one task.
+    ///
+    /// The builder targets `task_sla`, filters by the raw task sys_id, requests
+    /// the default Task SLA projection, and uses [`DisplayValue::Both`] so raw
+    /// reference sys_ids and human-readable SLA display values are available.
+    ///
+    /// No default ordering is applied, and `no_count()` is not set, so callers
+    /// can continue to customize the returned [`TableApi`].
+    ///
+    /// # Permissions
+    ///
+    /// `task_sla` can be ACL-restricted. Empty successful responses can mean
+    /// the task has no Task SLAs or that the integration user cannot read them.
+    pub fn task_slas(&self, task_sys_id: &str) -> TableApi {
+        self.table(TASK_SLA_TABLE)
+            .equals("task", task_sys_id)
+            .fields(TASK_SLA_DEFAULT_FIELDS)
+            .display_value(DisplayValue::Both)
+    }
+
+    /// Fetch all typed Task SLA rows for the record identified by number.
+    ///
+    /// The parent record is resolved with [`get_by_number`](Self::get_by_number).
+    /// If the number resolves to no readable record, this returns an empty
+    /// vector. Returned rows use the same grouping and ordering policy as
+    /// [`task_slas_for_tasks`](Self::task_slas_for_tasks).
+    ///
+    /// Empty results can mean no Task SLA rows or insufficient `task_sla` read
+    /// access.
+    pub async fn task_slas_for_number(&self, number: &str) -> Result<Vec<TaskSla>> {
+        let Some(record) = self.get_by_number(number).await? else {
+            return Ok(Vec::new());
+        };
+
+        let task_sys_id = record.sys_id;
+        let mut by_task = self.task_slas_for_tasks(&[task_sys_id.as_str()]).await?;
+        Ok(by_task.remove(&task_sys_id).unwrap_or_default())
+    }
+
+    /// Fetch typed Task SLA rows for many task sys_ids without issuing one
+    /// child query per task.
+    ///
+    /// Requested task ids are deduplicated before querying and every requested
+    /// id is prepopulated in the result map with an empty vector. Queries are
+    /// chunked at [`TASK_SLA_BULK_CHUNK_SIZE`] ids and run with at most
+    /// [`TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS`] chunks in flight. Each chunk is
+    /// drained with [`Paginator::collect_all`](crate::query::Paginator::collect_all).
+    ///
+    /// Rows are grouped by the raw `task` sys_id. Within each task, active rows
+    /// sort first, then known-unbreached rows, then ascending non-empty
+    /// `planned_end_time`.
+    ///
+    /// Empty vectors can mean no Task SLA rows or insufficient `task_sla` read
+    /// access.
+    pub async fn task_slas_for_tasks(
+        &self,
+        task_sys_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<TaskSla>>> {
+        let mut by_task: HashMap<String, Vec<TaskSla>> = task_sys_ids
+            .iter()
+            .map(|id| ((*id).to_string(), Vec::new()))
+            .collect();
+
+        let mut unique_task_ids: Vec<String> = task_sys_ids
+            .iter()
+            .copied()
+            .filter(|id| !id.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        unique_task_ids.sort_unstable();
+        unique_task_ids.dedup();
+
+        if unique_task_ids.is_empty() {
+            return Ok(by_task);
+        }
+
+        let chunks: Vec<Vec<String>> = unique_task_ids
+            .chunks(TASK_SLA_BULK_CHUNK_SIZE)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+
+        let mut chunk_results = stream::iter(chunks)
+            .map(|chunk| self.task_slas_for_task_chunk(chunk))
+            .buffer_unordered(TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS);
+
+        while let Some(result) = chunk_results.next().await {
+            for sla in result? {
+                let Some(task_sys_id) = sla.task_sys_id.clone() else {
+                    continue;
+                };
+                by_task.entry(task_sys_id).or_default().push(sla);
+            }
+        }
+
+        for slas in by_task.values_mut() {
+            sort_task_slas_for_status(slas);
+        }
+
+        Ok(by_task)
+    }
+
+    async fn task_slas_for_task_chunk(&self, task_sys_ids: Vec<String>) -> Result<Vec<TaskSla>> {
+        let task_refs: Vec<&str> = task_sys_ids.iter().map(String::as_str).collect();
+        let mut paginator = self
+            .table(TASK_SLA_TABLE)
+            .in_list("task", &task_refs)
+            .fields(TASK_SLA_DEFAULT_FIELDS)
+            .display_value(DisplayValue::Both)
+            .no_count()
+            .limit(crate::api::table::DEFAULT_PAGE_SIZE)
+            .paginate()?;
+
+        let result = paginator.collect_all().await?;
+        Ok(result.records.into_iter().map(TaskSla::from).collect())
+    }
+
     /// Fetch related rows for multiple parent records in one query by foreign key.
     ///
     /// This is useful when the caller already knows the child table and link field,
@@ -221,31 +372,44 @@ impl ServiceNowClient {
             return Ok(HashMap::new());
         }
 
-        let mut query = self
-            .table(table)
-            .in_list(foreign_key, parent_ids)
-            .fields(fields)
-            .display_value(display_value)
-            .exclude_reference_link(true);
-        if let Some((field, direction)) = order_by {
-            query = query.order_by(field, direction);
-        }
-
-        let response = query.execute().await?;
+        let parent_ids = unique_parent_ids(parent_ids);
         let mut by_parent: HashMap<String, Vec<Record>> = parent_ids
             .iter()
             .map(|id| ((*id).to_string(), Vec::new()))
             .collect();
 
-        for record in response.records {
-            let Some(parent_id) = record
+        let chunks = parent_ids
+            .chunks(RELATED_QUERY_CHUNK_SIZE)
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+
+        let chunk_records: Vec<Vec<Record>> = stream::iter(chunks)
+            .map(|chunk| async move {
+                let mut query = self
+                    .table(table)
+                    .in_list(foreign_key, &chunk)
+                    .fields(fields)
+                    .display_value(display_value)
+                    .exclude_reference_link(true);
+                if let Some((field, direction)) = order_by {
+                    query = query.order_by(field, direction);
+                }
+
+                let response = query.execute().await?;
+                Ok::<Vec<Record>, Error>(response.records)
+            })
+            .buffer_unordered(RELATED_QUERY_MAX_CONCURRENCY)
+            .try_collect()
+            .await?;
+
+        for record in chunk_records.into_iter().flatten() {
+            if let Some(parent_id) = record
                 .get_raw(foreign_key)
                 .or_else(|| record.get_str(foreign_key))
                 .map(ToString::to_string)
-            else {
-                continue;
-            };
-            by_parent.entry(parent_id).or_default().push(record);
+            {
+                by_parent.entry(parent_id).or_default().push(record);
+            }
         }
 
         Ok(by_parent)
@@ -1009,6 +1173,34 @@ fn is_sys_id(s: &str) -> bool {
     s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+fn unique_parent_ids<'a>(parent_ids: &'a [&str]) -> Vec<&'a str> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+
+    for parent_id in parent_ids {
+        if seen.insert(*parent_id) {
+            unique.push(*parent_id);
+        }
+    }
+
+    unique
+}
+
+fn sort_task_slas_for_status(slas: &mut [TaskSla]) {
+    slas.sort_by(|a, b| {
+        let a_active = a.active == Some(true);
+        let b_active = b.active == Some(true);
+        let a_unbreached = a.has_breached == Some(false);
+        let b_unbreached = b.has_breached == Some(false);
+
+        b_active
+            .cmp(&a_active)
+            .then_with(|| b_unbreached.cmp(&a_unbreached))
+            .then_with(|| compare_planned_end_time(a, b))
+            .then_with(|| a.sys_id.cmp(&b.sys_id))
+    });
+}
+
 // Implement Debug manually because Box<dyn Authenticator> is in the builder.
 impl std::fmt::Debug for ClientBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1021,5 +1213,17 @@ impl std::fmt::Debug for ClientBuilder {
             .field("timeout", &self.timeout)
             .field("rate_limit", &self.rate_limit)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_parent_ids_dedupes_in_request_order() {
+        let parent_ids = ["one", "two", "one", "three", "two"];
+
+        assert_eq!(unique_parent_ids(&parent_ids), vec!["one", "two", "three"]);
     }
 }

@@ -1,8 +1,15 @@
-use serde_json::json;
-use wiremock::matchers::{method, path, query_param};
+use serde_json::{json, Value};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    Arc,
+};
+use std::time::Duration;
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use servicenow_rs::prelude::*;
+
+const TASK_SLA_DEFAULT_FIELDS: &str = "sys_id,task,sla,stage,active,has_breached,start_time,end_time,planned_end_time,original_breach_time,percentage,time_left,business_percentage,business_time_left,business_duration,duration,schedule";
 
 /// Helper to build a client pointing at a wiremock server.
 async fn test_client(server: &MockServer) -> ServiceNowClient {
@@ -27,6 +34,77 @@ async fn graphql_client(server: &MockServer) -> ServiceNowClient {
         .build()
         .await
         .expect("failed to build GraphQL client")
+}
+
+fn fixture_sys_id(n: usize) -> String {
+    format!("{:032x}", n + 1)
+}
+
+fn as_str_refs(values: &[String]) -> Vec<&str> {
+    values.iter().map(String::as_str).collect()
+}
+
+fn request_query(request: &wiremock::Request) -> Option<String> {
+    request
+        .url
+        .query_pairs()
+        .find(|(key, _)| key == "sysparm_query")
+        .map(|(_, value)| value.into_owned())
+}
+
+fn in_list_values(query: &str, foreign_key: &str) -> Vec<String> {
+    let prefix = format!("{}IN", foreign_key);
+    query
+        .split('^')
+        .find_map(|part| part.strip_prefix(&prefix))
+        .unwrap_or_default()
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+async fn requests_for_path(server: &MockServer, api_path: &str) -> Vec<wiremock::Request> {
+    server
+        .received_requests()
+        .await
+        .expect("request recording enabled")
+        .into_iter()
+        .filter(|request| request.url.path() == api_path)
+        .collect()
+}
+
+fn task_sla_row(
+    sys_id: &str,
+    task_sys_id: &str,
+    task_display: &str,
+    sla_sys_id: &str,
+    sla_display: &str,
+    stage: &str,
+    active: bool,
+    has_breached: bool,
+    planned_end_time: &str,
+    business_percentage: &str,
+) -> Value {
+    json!({
+        "sys_id": { "value": sys_id, "display_value": sys_id },
+        "task": { "value": task_sys_id, "display_value": task_display },
+        "sla": { "value": sla_sys_id, "display_value": sla_display },
+        "stage": { "value": stage, "display_value": stage },
+        "active": { "value": active.to_string(), "display_value": active.to_string() },
+        "has_breached": { "value": has_breached.to_string(), "display_value": has_breached.to_string() },
+        "start_time": { "value": "2026-05-06 12:00:00", "display_value": "2026-05-06 12:00:00" },
+        "end_time": { "value": "", "display_value": "" },
+        "planned_end_time": { "value": planned_end_time, "display_value": planned_end_time },
+        "original_breach_time": { "value": planned_end_time, "display_value": planned_end_time },
+        "percentage": { "value": "42.5", "display_value": "42.5" },
+        "time_left": { "value": "1970-01-01 04:00:00", "display_value": "4 Hours" },
+        "business_percentage": { "value": business_percentage, "display_value": business_percentage },
+        "business_time_left": { "value": "1970-01-01 03:00:00", "display_value": "3 Hours" },
+        "business_duration": { "value": "1970-01-01 01:00:00", "display_value": "1 Hour" },
+        "duration": { "value": "1970-01-01 02:00:00", "display_value": "2 Hours" },
+        "schedule": { "value": "schedule_sys_id", "display_value": "24 x 7" }
+    })
 }
 
 #[tokio::test]
@@ -1423,6 +1501,418 @@ async fn test_token_auth() {
         .expect("query with token auth failed");
 
     assert_eq!(result.len(), 1);
+}
+
+// ── Task SLA read helper tests ──────────────────────────────────
+
+#[tokio::test]
+async fn test_task_slas_builder_sets_projection_display_and_no_orderby() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/task_sla"))
+        .and(query_param("sysparm_query", "task=task_sys_id"))
+        .and(query_param("sysparm_fields", TASK_SLA_DEFAULT_FIELDS))
+        .and(query_param("sysparm_display_value", "all"))
+        .and(query_param("sysparm_exclude_reference_link", "true"))
+        .and(query_param_is_missing("sysparm_orderby"))
+        .and(query_param_is_missing("sysparm_no_count"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let result = client
+        .task_slas("task_sys_id")
+        .execute()
+        .await
+        .expect("task_slas query failed");
+
+    assert!(result.is_empty());
+}
+
+#[tokio::test]
+async fn test_task_slas_for_number_resolves_parent_drains_pages_and_parses_display_values() {
+    let server = MockServer::start().await;
+    let task_sys_id = fixture_sys_id(10);
+    let sla_one = fixture_sys_id(20);
+    let sla_two = fixture_sys_id(21);
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .and(query_param("sysparm_query", "number=INC0010001"))
+        .and(query_param("sysparm_limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {
+                    "sys_id": task_sys_id.clone(),
+                    "number": "INC0010001"
+                }
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/task_sla"))
+        .and(query_param("sysparm_query", format!("taskIN{}", task_sys_id)))
+        .and(query_param("sysparm_fields", TASK_SLA_DEFAULT_FIELDS))
+        .and(query_param("sysparm_display_value", "all"))
+        .and(query_param("sysparm_no_count", "true"))
+        .and(query_param("sysparm_limit", "100"))
+        .and(query_param("sysparm_offset", "0"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header(
+                    "Link",
+                    format!(
+                        "<{}/api/now/table/task_sla?sysparm_limit=100&sysparm_offset=100>;rel=\"next\"",
+                        server.uri()
+                    ),
+                )
+                .set_body_json(json!({
+                    "result": [
+                        task_sla_row(
+                            &fixture_sys_id(30),
+                            &task_sys_id,
+                            "INC0010001",
+                            &sla_one,
+                            "Resolution SLA",
+                            "in_progress",
+                            true,
+                            false,
+                            "2026-05-06 17:00:00",
+                            "55.5"
+                        )
+                    ]
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/task_sla"))
+        .and(query_param(
+            "sysparm_query",
+            format!("taskIN{}", task_sys_id),
+        ))
+        .and(query_param("sysparm_fields", TASK_SLA_DEFAULT_FIELDS))
+        .and(query_param("sysparm_display_value", "all"))
+        .and(query_param("sysparm_no_count", "true"))
+        .and(query_param("sysparm_limit", "100"))
+        .and(query_param("sysparm_offset", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                task_sla_row(
+                    &fixture_sys_id(31),
+                    &task_sys_id,
+                    "INC0010001",
+                    &sla_two,
+                    "Response SLA",
+                    "in_progress",
+                    true,
+                    false,
+                    "2026-05-06 16:00:00",
+                    "65.25"
+                )
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let slas = client
+        .task_slas_for_number("INC0010001")
+        .await
+        .expect("task_slas_for_number failed");
+
+    assert_eq!(slas.len(), 2);
+    assert_eq!(slas[0].sys_id, fixture_sys_id(31));
+    assert_eq!(slas[0].task_sys_id.as_deref(), Some(task_sys_id.as_str()));
+    assert_eq!(slas[0].sla_sys_id.as_deref(), Some(sla_two.as_str()));
+    assert_eq!(slas[0].sla_name.as_deref(), Some("Response SLA"));
+    assert!(matches!(&slas[0].stage, Some(TaskSlaStage::InProgress)));
+    assert_eq!(slas[0].active, Some(true));
+    assert_eq!(slas[0].has_breached, Some(false));
+    assert_eq!(slas[0].business_elapsed_percentage, Some(65.25));
+    assert_eq!(slas[0].schedule_sys_id.as_deref(), Some("schedule_sys_id"));
+}
+
+#[tokio::test]
+async fn test_task_slas_for_tasks_chunks_groups_prepopulates_and_sorts() {
+    let server = MockServer::start().await;
+    let task_ids: Vec<String> = (0..101).map(fixture_sys_id).collect();
+    let task_refs = as_str_refs(&task_ids);
+    let first_task = task_ids[0].clone();
+    let missing_task = task_ids[1].clone();
+    let last_task = task_ids[100].clone();
+    let mock_task_ids = task_ids.clone();
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/task_sla"))
+        .respond_with(move |request: &wiremock::Request| {
+            let query = request_query(request).expect("task_sla query missing");
+            let chunk_ids = in_list_values(&query, "task");
+            let mut rows = Vec::new();
+
+            if chunk_ids.iter().any(|id| id == &mock_task_ids[0]) {
+                rows.push(task_sla_row(
+                    &fixture_sys_id(200),
+                    &mock_task_ids[0],
+                    "INC0010001",
+                    &fixture_sys_id(300),
+                    "Inactive SLA",
+                    "completed",
+                    false,
+                    false,
+                    "2026-05-06 13:00:00",
+                    "99.0",
+                ));
+                rows.push(task_sla_row(
+                    &fixture_sys_id(201),
+                    &mock_task_ids[0],
+                    "INC0010001",
+                    &fixture_sys_id(301),
+                    "Breached SLA",
+                    "in_progress",
+                    true,
+                    true,
+                    "2026-05-06 12:00:00",
+                    "95.0",
+                ));
+                rows.push(task_sla_row(
+                    &fixture_sys_id(202),
+                    &mock_task_ids[0],
+                    "INC0010001",
+                    &fixture_sys_id(302),
+                    "Later Active SLA",
+                    "in_progress",
+                    true,
+                    false,
+                    "2026-05-06 17:00:00",
+                    "40.0",
+                ));
+                rows.push(task_sla_row(
+                    &fixture_sys_id(203),
+                    &mock_task_ids[0],
+                    "INC0010001",
+                    &fixture_sys_id(303),
+                    "Next Breach SLA",
+                    "in_progress",
+                    true,
+                    false,
+                    "2026-05-06 15:00:00",
+                    "50.0",
+                ));
+            }
+
+            if chunk_ids.iter().any(|id| id == &mock_task_ids[100]) {
+                rows.push(task_sla_row(
+                    &fixture_sys_id(204),
+                    &mock_task_ids[100],
+                    "INC0010101",
+                    &fixture_sys_id(304),
+                    "Last Chunk SLA",
+                    "paused",
+                    true,
+                    false,
+                    "2026-05-06 18:00:00",
+                    "20.0",
+                ));
+            }
+
+            ResponseTemplate::new(200).set_body_json(json!({ "result": rows }))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let by_task = client
+        .task_slas_for_tasks(&task_refs)
+        .await
+        .expect("task_slas_for_tasks failed");
+
+    assert_eq!(by_task.len(), 101);
+    assert!(by_task
+        .get(&missing_task)
+        .expect("missing task should be prepopulated")
+        .is_empty());
+    assert_eq!(by_task.get(&last_task).expect("last task missing").len(), 1);
+
+    let first_rows = by_task.get(&first_task).expect("first task missing");
+    assert_eq!(first_rows.len(), 4);
+    assert_eq!(first_rows[0].sla_name.as_deref(), Some("Next Breach SLA"));
+    assert_eq!(first_rows[1].sla_name.as_deref(), Some("Later Active SLA"));
+    assert_eq!(first_rows[2].sla_name.as_deref(), Some("Breached SLA"));
+    assert_eq!(first_rows[3].sla_name.as_deref(), Some("Inactive SLA"));
+
+    let task_sla_requests = requests_for_path(&server, "/api/now/table/task_sla").await;
+    assert_eq!(task_sla_requests.len(), 2);
+    for request in &task_sla_requests {
+        let query = request_query(request).expect("task_sla query missing");
+        let chunk_ids = in_list_values(&query, "task");
+        assert!(
+            chunk_ids.len() <= 100,
+            "task_slas_for_tasks chunk exceeded 100 ids: {}",
+            chunk_ids.len()
+        );
+        assert!(
+            request.url.as_str().len() < 4000,
+            "encoded task_sla chunk URL exceeded 4 KB: {}",
+            request.url.as_str().len()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_task_slas_for_tasks_limits_chunk_concurrency_to_four() {
+    let server = MockServer::start().await;
+    let task_ids: Vec<String> = (0..401).map(fixture_sys_id).collect();
+    let task_refs = as_str_refs(&task_ids);
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let in_flight_for_mock = Arc::clone(&in_flight);
+    let max_for_mock = Arc::clone(&max_in_flight);
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/task_sla"))
+        .respond_with(move |_: &wiremock::Request| {
+            let current = in_flight_for_mock.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            max_for_mock.fetch_max(current, AtomicOrdering::SeqCst);
+            std::thread::sleep(Duration::from_millis(40));
+            in_flight_for_mock.fetch_sub(1, AtomicOrdering::SeqCst);
+            ResponseTemplate::new(200).set_body_json(json!({ "result": [] }))
+        })
+        .expect(5)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let by_task = client
+        .task_slas_for_tasks(&task_refs)
+        .await
+        .expect("task_slas_for_tasks failed");
+
+    assert_eq!(by_task.len(), 401);
+    assert!(
+        max_in_flight.load(AtomicOrdering::SeqCst) <= 4,
+        "task_slas_for_tasks exceeded 4 concurrent chunks"
+    );
+}
+
+#[tokio::test]
+async fn test_include_related_task_sla_chunks_parent_ids() {
+    let server = MockServer::start().await;
+    let task_ids: Vec<String> = (0..101).map(fixture_sys_id).collect();
+    let incidents: Vec<Value> = task_ids
+        .iter()
+        .enumerate()
+        .map(|(idx, sys_id)| {
+            json!({
+                "sys_id": sys_id,
+                "number": format!("INC{:07}", idx + 1)
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": incidents
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/task_sla"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": []
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let result = client
+        .table("incident")
+        .fields(&["number"])
+        .include_related(&["task_sla"])
+        .limit(101)
+        .execute()
+        .await
+        .expect("incident task_sla related query failed");
+
+    assert_eq!(result.len(), 101);
+    assert!(
+        !result.has_errors(),
+        "task_sla relationship should resolve through task inheritance"
+    );
+
+    let task_sla_requests = requests_for_path(&server, "/api/now/table/task_sla").await;
+    assert_eq!(task_sla_requests.len(), 2);
+    for request in &task_sla_requests {
+        let query = request_query(request).expect("task_sla query missing");
+        let chunk_ids = in_list_values(&query, "task");
+        assert!(
+            chunk_ids.len() <= 100,
+            "related task_sla chunk exceeded 100 ids: {}",
+            chunk_ids.len()
+        );
+    }
+}
+
+#[test]
+fn test_task_sla_schema_is_defined_on_task_and_inherited_by_task_subclasses() {
+    for release in ["washington", "xanadu", "yokohama"] {
+        let registry = servicenow_rs::schema::SchemaRegistry::from_release(release).unwrap();
+
+        assert!(registry.has_table("task_sla"), "{release} missing task_sla");
+        assert!(
+            registry.has_table("contract_sla"),
+            "{release} missing contract_sla"
+        );
+        assert!(
+            registry.has_field("task_sla", "business_percentage"),
+            "{release} missing task_sla.business_percentage"
+        );
+        assert!(
+            registry.has_field("contract_sla", "schedule"),
+            "{release} missing contract_sla.schedule"
+        );
+
+        let task_rel = registry
+            .relationship("task", "task_sla")
+            .expect("task_sla relationship missing on task");
+        assert_eq!(task_rel.table, "task_sla");
+        assert_eq!(task_rel.foreign_key, "task");
+        assert_eq!(
+            task_rel.relationship_type,
+            servicenow_rs::schema::RelationshipType::OneToMany
+        );
+
+        for table in ["incident", "change_request", "problem"] {
+            let inherited = registry
+                .relationship(table, "task_sla")
+                .unwrap_or_else(|| panic!("{release} {table} missing inherited task_sla"));
+            assert_eq!(inherited.table, "task_sla");
+            assert!(
+                !registry
+                    .table(table)
+                    .expect("table exists")
+                    .relationships
+                    .contains_key("task_sla"),
+                "{release} should not duplicate task_sla on {table}"
+            );
+        }
+    }
 }
 
 // ── Journal field tests ─────────────────────────────────────────

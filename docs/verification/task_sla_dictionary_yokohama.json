@@ -1,0 +1,123 @@
+{
+  "metadata": {
+    "release": "yokohama",
+    "table": "task_sla",
+    "dictionary_query": "GET /api/now/table/sys_dictionary?sysparm_query=name=task_sla&sysparm_fields=element,column_label,internal_type,reference",
+    "generated_at": "2026-05-07T03:00:21Z",
+    "capture_status": "not_captured",
+    "capture_reason": "SERVICENOW_INSTANCE was not set in the Worker C shell; no live Yokohama credentials were available.",
+    "source_notes": [
+      "The spec_columns entries below are the candidate internal columns from docs/task-sla-spec.md.",
+      "dictionary_rows is intentionally empty because no live sys_dictionary response was captured.",
+      "Do not treat this file as live dictionary proof until capture_status is replaced with captured and dictionary_rows contains ServiceNow response rows."
+    ]
+  },
+  "dictionary_rows": [],
+  "spec_columns": [
+    {
+      "rust_field": "task_sys_id",
+      "element": "task",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "sla_sys_id",
+      "element": "sla",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "stage",
+      "element": "stage",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "active",
+      "element": "active",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "has_breached",
+      "element": "has_breached",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "start_time",
+      "element": "start_time",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "end_time",
+      "element": "end_time",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "planned_end_time",
+      "element": "planned_end_time",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "original_breach_time",
+      "element": "original_breach_time",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "actual_elapsed_percentage",
+      "element": "percentage",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "actual_time_left",
+      "element": "time_left",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "business_elapsed_percentage",
+      "element": "business_percentage",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "business_time_left",
+      "element": "business_time_left",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "business_duration",
+      "element": "business_duration",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "duration",
+      "element": "duration",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    },
+    {
+      "rust_field": "schedule_sys_id",
+      "element": "schedule",
+      "evidence_status": "not_verified_live",
+      "source_note": "Candidate internal column from docs/task-sla-spec.md."
+    }
+  ],
+  "derived_fields": [
+    {
+      "rust_field": "sla_name",
+      "source": "display_value of the sla reference field when sysparm_display_value=all",
+      "dictionary_column": null,
+      "source_note": "Derived field from docs/task-sla-spec.md; not expected in sys_dictionary as a task_sla column."
+    }
+  ],
+  "unsupported_or_unverified_fields": []
+}

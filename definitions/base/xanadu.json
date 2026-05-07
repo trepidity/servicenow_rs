@@ -73,7 +73,13 @@
         "user_input": { "type": "string", "label": "User input" },
         "notify": { "type": "integer", "label": "Notify" }
       },
-      "relationships": {}
+      "relationships": {
+        "task_sla": {
+          "table": "task_sla",
+          "foreign_key": "task",
+          "type": "one_to_many"
+        }
+      }
     },
     "incident": {
       "label": "Incident",
@@ -391,6 +397,38 @@
         "task": { "type": "reference", "reference_table": "task", "label": "Task" },
         "ci_item": { "type": "reference", "reference_table": "cmdb_ci", "label": "Configuration item" },
         "sys_created_on": { "type": "date_time", "read_only": true, "label": "Created" }
+      },
+      "relationships": {}
+    },
+    "task_sla": {
+      "label": "Task SLA",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "task": { "type": "reference", "reference_table": "task", "label": "Task" },
+        "sla": { "type": "reference", "reference_table": "contract_sla", "label": "SLA" },
+        "stage": { "type": "choice", "label": "Stage" },
+        "active": { "type": "boolean", "label": "Active" },
+        "has_breached": { "type": "boolean", "label": "Has breached" },
+        "start_time": { "type": "date_time", "label": "Start time" },
+        "end_time": { "type": "date_time", "label": "End time" },
+        "planned_end_time": { "type": "date_time", "label": "Planned end time" },
+        "original_breach_time": { "type": "date_time", "label": "Original breach time" },
+        "percentage": { "type": "decimal", "label": "Actual elapsed percentage" },
+        "time_left": { "type": "duration", "label": "Actual time left" },
+        "business_percentage": { "type": "decimal", "label": "Business elapsed percentage" },
+        "business_time_left": { "type": "duration", "label": "Business time left" },
+        "business_duration": { "type": "duration", "label": "Business duration" },
+        "duration": { "type": "duration", "label": "Duration" },
+        "schedule": { "type": "reference", "reference_table": "cmn_schedule", "label": "Schedule" }
+      },
+      "relationships": {}
+    },
+    "contract_sla": {
+      "label": "SLA Definition",
+      "fields": {
+        "sys_id": { "type": "string", "max_length": 32, "read_only": true, "label": "Sys ID" },
+        "name": { "type": "string", "max_length": 255, "label": "Name" },
+        "schedule": { "type": "reference", "reference_table": "cmn_schedule", "label": "Schedule" }
       },
       "relationships": {}
     }

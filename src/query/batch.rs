@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures::future::join_all;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use tracing::debug;
 
 use crate::error::{Error, Result};
@@ -10,11 +11,13 @@ use crate::model::value::DisplayValue;
 use crate::schema::definition::RelationshipDef;
 use crate::transport::TransportHandle;
 
+pub(crate) const RELATED_QUERY_CHUNK_SIZE: usize = 100;
+pub(crate) const RELATED_QUERY_MAX_CONCURRENCY: usize = 4;
+
 /// Fetch related records for a set of parent records using concurrent requests.
 ///
-/// For each relationship, fires a single query that fetches all related records
-/// for all parent sys_ids at once (using IN operator), then distributes the results
-/// back to the correct parent records.
+/// For each relationship, fetches related records with chunked IN queries, then
+/// distributes the results back to the correct parent records.
 pub async fn fetch_related_concurrent(
     transport: TransportHandle,
     parent_table: &str,
@@ -27,8 +30,7 @@ pub async fn fetch_related_concurrent(
     }
 
     // Collect all parent sys_ids.
-    let sys_ids: Vec<&str> = parents.iter().map(|r| r.sys_id.as_str()).collect();
-    let sys_id_list = sys_ids.join(",");
+    let sys_ids = unique_parent_sys_ids(parents);
 
     debug!(
         parent_table = parent_table,
@@ -42,14 +44,14 @@ pub async fn fetch_related_concurrent(
         .iter()
         .map(|(rel_name, rel_def)| {
             let transport = Arc::clone(&transport);
-            let sys_id_list = sys_id_list.clone();
+            let sys_ids = sys_ids.clone();
             let rel_name = rel_name.to_string();
             let rel_def = (*rel_def).clone();
 
             async move {
                 let result = fetch_relationship_with_raw_refs(
                     transport.as_ref(),
-                    &sys_id_list,
+                    &sys_ids,
                     &rel_def,
                     display_value,
                 )
@@ -103,6 +105,39 @@ pub async fn fetch_related_concurrent(
 /// Fetch all records from a relationship table matching the given parent sys_ids.
 pub(crate) async fn fetch_relationship_with_raw_refs(
     transport: &dyn crate::transport::Transport,
+    parent_sys_ids: &[String],
+    rel_def: &RelationshipDef,
+    display_value: DisplayValue,
+) -> Result<Vec<Record>> {
+    if parent_sys_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let chunks = parent_id_chunks(parent_sys_ids);
+    let chunk_count = chunks.len();
+
+    let chunk_records: Vec<Vec<Record>> = stream::iter(chunks)
+        .map(|sys_id_list| async move {
+            fetch_relationship_chunk(transport, &sys_id_list, rel_def, display_value).await
+        })
+        .buffer_unordered(RELATED_QUERY_MAX_CONCURRENCY)
+        .try_collect()
+        .await?;
+
+    let records = chunk_records.into_iter().flatten().collect::<Vec<_>>();
+
+    debug!(
+        table = rel_def.table,
+        count = records.len(),
+        chunks = chunk_count,
+        "fetched related records"
+    );
+
+    Ok(records)
+}
+
+async fn fetch_relationship_chunk(
+    transport: &dyn crate::transport::Transport,
     sys_id_list: &str,
     rel_def: &RelationshipDef,
     display_value: DisplayValue,
@@ -149,11 +184,65 @@ pub(crate) async fn fetch_relationship_with_raw_refs(
         _ => Vec::new(),
     };
 
-    debug!(
-        table = rel_def.table,
-        count = records.len(),
-        "fetched related records"
-    );
-
     Ok(records)
+}
+
+fn unique_parent_sys_ids(parents: &[Record]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut sys_ids = Vec::new();
+
+    for parent in parents {
+        if seen.insert(parent.sys_id.as_str()) {
+            sys_ids.push(parent.sys_id.clone());
+        }
+    }
+
+    sys_ids
+}
+
+fn parent_id_chunks(parent_sys_ids: &[String]) -> Vec<String> {
+    parent_sys_ids
+        .chunks(RELATED_QUERY_CHUNK_SIZE)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_parent_sys_ids_dedupes_in_request_order() {
+        let parents = vec![
+            Record::new("task", "one"),
+            Record::new("task", "two"),
+            Record::new("task", "one"),
+            Record::new("task", "three"),
+        ];
+
+        assert_eq!(
+            unique_parent_sys_ids(&parents),
+            vec!["one".to_string(), "two".to_string(), "three".to_string()]
+        );
+    }
+
+    #[test]
+    fn parent_id_chunks_caps_each_in_query_at_100_ids() {
+        let parent_sys_ids = (0..205).map(|i| format!("id{i:03}")).collect::<Vec<_>>();
+
+        let chunks = parent_id_chunks(&parent_sys_ids);
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].split(',').count(), RELATED_QUERY_CHUNK_SIZE);
+        assert_eq!(chunks[1].split(',').count(), RELATED_QUERY_CHUNK_SIZE);
+        assert_eq!(chunks[2].split(',').count(), 5);
+        assert!(chunks[0].starts_with("id000,id001"));
+        assert!(chunks[2].ends_with("id204"));
+    }
 }

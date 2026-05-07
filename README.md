@@ -119,6 +119,46 @@ let client = ServiceNowClient::builder()
     .await?;
 ```
 
+### Task SLA Status
+
+Task SLA helpers read ServiceNow's SLA Engine output from `task_sla`. They do not recompute schedules, pause windows, or breach times locally.
+
+For a single incident or task number, use `task_slas_for_number()`:
+
+```rust
+let slas = client.task_slas_for_number("INC0010001").await?;
+
+if slas.is_empty() {
+    println!("No readable Task SLA rows");
+}
+
+for sla in &slas {
+    println!(
+        "{} active={:?} breached={:?} planned_end={:?}",
+        sla.sla_name.as_deref().unwrap_or("(unnamed SLA)"),
+        sla.active,
+        sla.has_breached,
+        sla.planned_end_time
+    );
+}
+```
+
+`task_slas_for_number()` first resolves the parent record with `get_by_number()`, then queries Task SLA rows by the parent `sys_id`. Empty results can mean either no Task SLAs exist or the API user lacks read access to `task_sla`.
+
+For reports or large parent sets, avoid calling the single-record helper in a loop. Use `task_slas_for_tasks()` with raw task sys_ids:
+
+```rust
+let task_ids = vec!["46d44f12a9fe19810012d100cca80666", "46d44f12a9fe19810012d100cca80667"];
+let by_task = client.task_slas_for_tasks(&task_ids).await?;
+
+for task_id in &task_ids {
+    let slas = by_task.get(*task_id).expect("requested task is prepopulated");
+    println!("{} has {} readable Task SLA rows", task_id, slas.len());
+}
+```
+
+The bulk helper deduplicates task ids, prepopulates every requested id with an empty vector, chunks `task_sla` `IN` queries at 100 ids, and runs at most 4 chunks concurrently. Results are grouped by the raw `task` sys_id. The helpers request `DisplayValue::Both`: raw values drive parsing and grouping, while display values such as `sla_name` are for humans.
+
 ### Create a Record
 
 ```rust
@@ -237,6 +277,8 @@ assert!(!result.is_empty());   // main records are still returned
 ```
 
 `include_related()` also works when using `DisplayValue::Display`; related fetches preserve raw foreign keys internally so records can still be matched back to their parent.
+
+Task SLA rows are exposed as a task-level relationship, so subclasses such as `incident`, `change_request`, and `problem` inherit `include_related(&["task_sla"])` when a bundled schema release is loaded. Related-record fetching chunks large parent sets using the same 100-id chunk size and 4-concurrent-chunk default as `task_slas_for_tasks()`. Page or cap the parent query intentionally; chunking protects URL length, not total response size.
 
 ### Dot-Walking
 
@@ -881,6 +923,8 @@ let raw = record.get_raw("state");       // Some("1")
 let display = record.get_display("state"); // Some("New")
 let prefer_display = record.get_str("state"); // Some("New") -- prefers display
 ```
+
+When a helper requests `DisplayValue::Both`, keep raw and display values separate in your own logic. For Task SLA rows, raw reference values are sys_ids used for grouping and typed parsing; display values such as an SLA name are presentation data.
 
 Reference fields with `DisplayValue::Both` also include a link URL:
 

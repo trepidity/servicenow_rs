@@ -6,8 +6,34 @@
 //!
 //! Required env vars:
 //!   SERVICENOW_INSTANCE, SERVICENOW_USERNAME, SERVICENOW_PASSWORD
+//!
+//! Task SLA notes:
+//!   `task_sla` is often ACL-restricted. A successful empty result can mean
+//!   either no Task SLA rows exist for the sampled task or the integration user
+//!   lacks read access. These tests print that distinction instead of treating
+//!   zero rows as a hard failure.
 
 use servicenow_rs::prelude::*;
+
+const TASK_SLA_DEFAULT_FIELDS: &[&str] = &[
+    "sys_id",
+    "task",
+    "sla",
+    "stage",
+    "active",
+    "has_breached",
+    "start_time",
+    "end_time",
+    "planned_end_time",
+    "original_breach_time",
+    "percentage",
+    "time_left",
+    "business_percentage",
+    "business_time_left",
+    "business_duration",
+    "duration",
+    "schedule",
+];
 
 fn should_run() -> bool {
     std::env::var("SERVICENOW_LIVE_TEST").is_ok()
@@ -233,6 +259,57 @@ async fn test_live_related_records() {
         for task in tasks.iter().take(3) {
             println!("  - {}", task.get_str("number").unwrap_or("?"));
         }
+    }
+}
+
+#[tokio::test]
+async fn test_live_task_sla_projection_readable_or_acl_empty() {
+    if !should_run() {
+        return;
+    }
+    let client = live_client().await;
+
+    let Some(incident) = client
+        .table("incident")
+        .fields(&["sys_id", "number"])
+        .limit(1)
+        .first()
+        .await
+        .expect("incident lookup failed")
+    else {
+        println!("No incidents available to sample for Task SLA read-only probe");
+        return;
+    };
+
+    let number = incident.get_str("number").unwrap_or("?");
+    let result = client
+        .table("task_sla")
+        .equals("task", &incident.sys_id)
+        .fields(TASK_SLA_DEFAULT_FIELDS)
+        .display_value(DisplayValue::Both)
+        .limit(10)
+        .execute()
+        .await
+        .expect("task_sla projection query failed; check task_sla ACLs and field access");
+
+    if result.is_empty() {
+        println!(
+            "{}: zero readable Task SLA rows; this can mean no SLAs or task_sla ACL restrictions",
+            number
+        );
+        return;
+    }
+
+    println!("{}: {} readable Task SLA rows", number, result.len());
+    for sla in &result {
+        assert!(sla.has_field("sys_id"), "task_sla row missing sys_id");
+        assert!(sla.has_field("task"), "task_sla row missing task");
+        println!(
+            "  SLA raw={:?} display={:?} stage={:?}",
+            sla.get_raw("sla"),
+            sla.get_display("sla"),
+            sla.get_str("stage")
+        );
     }
 }
 

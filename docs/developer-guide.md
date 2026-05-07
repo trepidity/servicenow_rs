@@ -610,6 +610,61 @@ The `TableApi` shorthand methods (`.equals()`, `.contains()`, etc.) push `Condit
 
 `FetchStrategy::DotWalk` does not auto-generate `sysparm_fields` entries from schema relationship names. ServiceNow dot-walking only works through actual reference fields, so `.dot_walk()` remains explicit and `.include_related()` falls back to concurrent related-record fetches.
 
+## Task SLA Read Helpers
+
+Task SLA support is read-only and uses ServiceNow's SLA Engine output from `task_sla`. The crate must not calculate breach windows, pause duration, schedules, or business elapsed time locally.
+
+### Public Query Plan
+
+There are three intended entry points:
+
+| Method | Intended use | Query shape |
+|---|---|---|
+| `task_slas(task_sys_id)` | One task when the caller wants a customizable `TableApi` | `task_sla` with `task=<sys_id>`, default projection, `DisplayValue::Both`, no preset ordering, and no `no_count()` |
+| `task_slas_for_number(number)` | One incident/task number | Resolve parent through `get_by_number()`, then delegate to `task_slas_for_tasks(&[sys_id])` |
+| `task_slas_for_tasks(task_sys_ids)` | Reports and bulk workflows | Deduplicate ids, prepopulate every requested id, query `task IN (...)` chunks, drain pagination, group by raw `task` sys_id |
+
+The default Task SLA projection is:
+
+```text
+sys_id,task,sla,stage,active,has_breached,start_time,end_time,
+planned_end_time,original_breach_time,percentage,time_left,
+business_percentage,business_time_left,business_duration,duration,schedule
+```
+
+`sla_name` is not a column and must not be requested in `sysparm_fields`. It is derived from the display value of the `sla` reference when `DisplayValue::Both` is used.
+
+### Field Evidence
+
+Yokohama dictionary evidence belongs in `docs/verification/task_sla_dictionary_yokohama.json`. In this workspace, live credentials were unavailable, so the committed file marks `capture_status` as `not_captured`, leaves `dictionary_rows` empty, and records only the spec's candidate columns as `not_verified_live`. Replace that metadata only after capturing:
+
+```text
+GET /api/now/table/sys_dictionary?sysparm_query=name=task_sla&sysparm_fields=element,column_label,internal_type,reference
+```
+
+Do not add typed Task SLA fields that are absent from the captured dictionary. Unknown or absent fields should parse as `None` while preserving the raw `Record`.
+
+### ACL Caveat
+
+`task_sla` can be ACL-restricted. A successful empty response can mean "no Task SLAs" or "the integration user cannot read Task SLAs." The helpers preserve empty results instead of converting them to errors. Live read-only tests should print an ACL note when zero rows are returned.
+
+### Raw And Display Values
+
+Task SLA helpers use `DisplayValue::Both` because typed parsing and grouping need raw values while UI examples need display values. Always group child rows by `record.get_raw("task")`, not by the display value. Display values such as `sla_name` are presentation data.
+
+### Chunking Defaults
+
+`task_slas_for_tasks()` and relationship traversal through `fetch_related_by_foreign_key()` use the same large-system defaults:
+
+| Default | Value |
+|---|---|
+| Task ids per `IN` query | 100 |
+| Max concurrent chunks | 4 |
+| Bulk count behavior | `sysparm_no_count=true` |
+| Pagination | Drain pages with `Paginator::collect_all()` |
+
+`include_related(&["task_sla"])` is appropriate when a parent query already returns the task records. For full reports where the caller already has task sys_ids, `task_slas_for_tasks()` avoids an extra parent-record hop. In both cases, callers should still page or cap parent/report sizes; chunking protects URL length and concurrency, not response volume.
+
 ## Journal Field Internals
 
 Journal fields (work notes, comments) are one of the most confusing parts of the ServiceNow API. They do not behave like normal record fields. This section explains what happens at the API level and how the library models it.

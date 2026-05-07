@@ -63,6 +63,7 @@ pub mod prelude {
     pub use crate::error::{Error, Result};
     pub use crate::model::{
         parse_servicenow_timestamp, DisplayValue, FieldValue, JournalEntry, QueryResult, Record,
+        TaskSla, TaskSlaStage, TaskSlaSummary,
     };
     pub use crate::prefix::PrefixRegistry;
     pub use crate::query::{FetchStrategy, Operator, Order, Paginator};
