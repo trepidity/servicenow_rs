@@ -614,9 +614,9 @@ The `TableApi` shorthand methods (`.equals()`, `.contains()`, etc.) push `Condit
 
 Task SLA support is read-only and uses ServiceNow's SLA Engine output from `task_sla`. The crate must not calculate breach windows, pause duration, schedules, or business elapsed time locally.
 
-### v0.4.0 Public Surface
+### v0.5.0 Public Surface
 
-The consumer-facing v0.4.0 surface is:
+The consumer-facing v0.5.0 surface is:
 
 | Item | Purpose |
 |---|---|
@@ -631,11 +631,11 @@ The consumer-facing v0.4.0 surface is:
 | `TASK_SLA_BULK_CHUNK_SIZE` | Default bulk `IN` query chunk size, currently 100 task ids |
 | `TASK_SLA_BULK_MAX_CONCURRENT_CHUNKS` | Default bulk concurrency cap, currently 4 chunks in flight |
 
-The v0.4.0 consumer pin stanza is:
+The v0.5.0 consumer pin stanza is:
 
 ```toml
 [dependencies]
-servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.4.0" }
+servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.5.0" }
 ```
 
 ### Public Query Plan

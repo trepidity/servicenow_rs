@@ -42,6 +42,15 @@
 //! # }
 //! ```
 
+#[cfg(all(
+    feature = "rustls-tls",
+    any(feature = "native-tls", feature = "native-tls-vendored")
+))]
+compile_error!(
+    "servicenow_rs: enable exactly one TLS backend. \
+     rustls is the default; pass `default-features = false` when enabling native-tls."
+);
+
 pub mod api;
 pub mod auth;
 pub mod client;

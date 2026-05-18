@@ -16,18 +16,27 @@ Provides a typed, builder-based interface to the ServiceNow Table API and Aggreg
 - **Layered configuration** -- builder methods, environment variables, TOML config file, with clear precedence
 - **Multiple auth methods** -- Basic auth and Bearer token auth, with a trait for custom implementations
 - **Transport resilience** -- automatic retry with exponential backoff, rate limiting, session cookie reuse
-- **Feature flags** -- `table_api` (default) and `codegen`
+- **Feature flags** -- TLS backend selection, with rustls enabled by default
 
 ## Installation
 
-For the v0.4.0 Task SLA API, downstream consumers should pin the repository
+For the v0.5.0 API, downstream consumers should pin the repository
 tag until crates.io publication is decided:
 
 ```toml
 [dependencies]
-servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.4.0" }
-tokio = { version = "1", features = ["full"] }
-serde_json = "1"
+servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.5.0" }
+tokio = { version = "1.52.3", features = ["full"] }
+serde_json = "1.0.149"
+```
+
+`v0.5.0` switches the default TLS backend to rustls through reqwest 0.13. To
+build with native TLS instead, disable default features and enable one native
+TLS backend:
+
+```toml
+[dependencies]
+servicenow_rs = { git = "https://github.com/trepidity/servicenow_rs", tag = "v0.5.0", default-features = false, features = ["native-tls"] }
 ```
 
 ## Quick Start
@@ -124,7 +133,7 @@ let client = ServiceNowClient::builder()
 
 Task SLA helpers read ServiceNow's SLA Engine output from `task_sla`. They do not recompute schedules, pause windows, or breach times locally.
 
-The v0.4.0 public Task SLA surface includes:
+The public Task SLA surface includes:
 
 ```rust
 use servicenow_rs::client::{
@@ -1042,8 +1051,9 @@ for record in &result {
 
 | Feature | Default | Description |
 |---|---|---|
-| `table_api` | Yes | Table API support (query, CRUD, pagination) |
-| `codegen` | No | Code generation for typed table structs (future) |
+| `rustls-tls` | Yes | Uses reqwest's rustls backend. |
+| `native-tls` | No | Uses reqwest's native-tls backend. Disable default features before enabling. |
+| `native-tls-vendored` | No | Uses reqwest's native-tls backend with vendored OpenSSL where supported. Disable default features before enabling. |
 
 ## Contributing
 
