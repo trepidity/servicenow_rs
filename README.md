@@ -576,7 +576,9 @@ let auth = BasicAuth::from_env()?;
 let auth = BasicAuth::new("admin", "password").without_session();
 ```
 
-BasicAuth encodes credentials as Base64 at construction time and supports session cookie reuse by default (reqwest's cookie store).
+BasicAuth builds the Basic `Authorization` header value at construction time, does not retain the raw password after construction, and stores the encoded header value in zeroizing memory. The encoded Basic header is still a credential-equivalent secret and is redacted from `Debug`. Session cookie reuse remains enabled by default through reqwest's cookie store; use `.without_session()` to disable it.
+
+Credential memory hardening reduces retained secret material inside the authenticator. It does not eliminate transient copies created by environment/config loading, subprocess stdout, request header construction, reqwest internals, session cookies, cloned authenticators, or OS/process memory behavior.
 
 ### TokenAuth
 
@@ -592,6 +594,8 @@ let auth = TokenAuth::custom_header("X-sn-api-token", "my-token");
 // From environment variable (SERVICENOW_API_TOKEN)
 let auth = TokenAuth::from_env()?;
 ```
+
+TokenAuth stores retained token material in zeroizing memory and redacts it from `Debug`. Request headers still contain credential material while each request is being built and sent.
 
 ### Authenticator Trait
 

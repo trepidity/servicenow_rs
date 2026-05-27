@@ -16,8 +16,8 @@ src/
 
   auth/
     mod.rs            Authenticator trait definition.
-    basic.rs          BasicAuth (username/password, Base64 encoding).
-    token.rs          TokenAuth (Bearer token, custom header).
+    basic.rs          BasicAuth (username plus zeroizing encoded Basic header storage).
+    token.rs          TokenAuth (zeroizing Bearer/custom token storage).
 
   transport/
     mod.rs            Re-exports.
@@ -169,6 +169,7 @@ Key considerations:
 - The `authenticate` method is called on every request. The transport layer calls `refresh()` automatically on 401 responses before retrying.
 - Use interior mutability (`RwLock`, `Mutex`) for mutable state since `Authenticator` requires `Send + Sync`.
 - The `supports_session` return value controls whether reqwest enables its cookie store. BasicAuth returns `true`; token-based methods typically return `false`.
+- BasicAuth should not retain raw passwords after construction. Store reusable credential material, such as the encoded Basic header, in zeroizing containers and keep Debug output redacted.
 - The `method_name` string is included in the User-Agent header.
 
 ## Adding New API Endpoints

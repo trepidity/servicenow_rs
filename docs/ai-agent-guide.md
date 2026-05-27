@@ -688,10 +688,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 | Method | Description |
 |---|---|
-| `::new(username, password)` | Create from strings |
+| `::new(username, password)` | Create Basic auth from username/password; the raw password is consumed to build the encoded header and is not retained by BasicAuth. |
 | `::from_env()` | From SERVICENOW_USERNAME and SERVICENOW_PASSWORD |
 | `.without_session()` | Disable cookie reuse |
 | `.username()` | Get username |
+
+BasicAuth stores the encoded Basic header as secret material in zeroizing storage; callers should still treat the constructed authenticator as credential-bearing.
+
+Credential zeroization is best-effort hardening for retained authenticator state. It does not cover transient environment/config values, subprocess stdout, per-request header values, reqwest internals, session cookies, cloned authenticators, or OS/process memory behavior.
 
 **TokenAuth** (`src/auth/token.rs`):
 
@@ -700,6 +704,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 | `::bearer(token)` | Authorization: Bearer <token> |
 | `::custom_header(header, token)` | Custom header name |
 | `::from_env()` | From SERVICENOW_API_TOKEN |
+
+TokenAuth stores retained token material in zeroizing storage and redacts it from `Debug`. Request headers still contain credential material while each request is being built and sent.
 
 **Authenticator trait** (`src/auth/mod.rs`):
 

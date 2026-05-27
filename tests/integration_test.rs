@@ -36,6 +36,46 @@ async fn graphql_client(server: &MockServer) -> ServiceNowClient {
         .expect("failed to build GraphQL client")
 }
 
+#[tokio::test]
+async fn test_basic_auth_without_session_does_not_reuse_cookies() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("Set-Cookie", "JSESSIONID=abc; Path=/")
+                .set_body_json(json!({ "result": [] })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = ServiceNowClient::builder()
+        .instance(server.uri())
+        .auth(BasicAuth::new("test_user", "test_pass").without_session())
+        .allow_http()
+        .build()
+        .await
+        .expect("failed to build test client");
+
+    client
+        .table("incident")
+        .limit(1)
+        .execute()
+        .await
+        .expect("first query");
+    client
+        .table("incident")
+        .limit(1)
+        .execute()
+        .await
+        .expect("second query");
+
+    let requests = requests_for_path(&server, "/api/now/table/incident").await;
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].headers.get("cookie").is_none());
+}
+
 fn fixture_sys_id(n: usize) -> String {
     format!("{:032x}", n + 1)
 }

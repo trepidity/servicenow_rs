@@ -1,7 +1,9 @@
 use async_trait::async_trait;
+use reqwest::header::HeaderValue;
 use reqwest::RequestBuilder;
+use zeroize::Zeroizing;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::Authenticator;
 
@@ -9,6 +11,8 @@ use super::Authenticator;
 ///
 /// Sends the token as a Bearer token in the Authorization header.
 /// Some ServiceNow instances may also accept tokens via custom headers.
+/// Retained token material is stored in zeroizing memory and redacted from
+/// `Debug` output.
 ///
 /// # Examples
 ///
@@ -27,7 +31,7 @@ use super::Authenticator;
 /// ```
 #[derive(Clone)]
 pub struct TokenAuth {
-    token: String,
+    token: Zeroizing<String>,
     header_name: String,
     header_prefix: Option<String>,
 }
@@ -46,7 +50,7 @@ impl TokenAuth {
     /// Create a Bearer token auth (Authorization: Bearer <token>).
     pub fn bearer(token: impl Into<String>) -> Self {
         Self {
-            token: token.into(),
+            token: Zeroizing::new(token.into()),
             header_name: "Authorization".to_string(),
             header_prefix: Some("Bearer".to_string()),
         }
@@ -58,7 +62,7 @@ impl TokenAuth {
     /// like `X-sn-api-token` or similar.
     pub fn custom_header(header_name: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
-            token: token.into(),
+            token: Zeroizing::new(token.into()),
             header_name: header_name.into(),
             header_prefix: None,
         }
@@ -71,17 +75,24 @@ impl TokenAuth {
         })?;
         Ok(Self::bearer(token))
     }
+
+    fn authorization_value(&self) -> Result<HeaderValue> {
+        let raw_value = if let Some(ref prefix) = self.header_prefix {
+            Zeroizing::new(format!("{} {}", prefix, self.token.as_str()))
+        } else {
+            Zeroizing::new(self.token.as_str().to_string())
+        };
+        let mut value = HeaderValue::from_str(raw_value.as_str())
+            .map_err(|err| Error::Config(format!("invalid token auth header value: {err}")))?;
+        value.set_sensitive(true);
+        Ok(value)
+    }
 }
 
 #[async_trait]
 impl Authenticator for TokenAuth {
     async fn authenticate(&self, request: RequestBuilder) -> Result<RequestBuilder> {
-        let value = if let Some(ref prefix) = self.header_prefix {
-            format!("{} {}", prefix, self.token)
-        } else {
-            self.token.clone()
-        };
-        Ok(request.header(&self.header_name, value))
+        Ok(request.header(&self.header_name, self.authorization_value()?))
     }
 
     fn supports_session(&self) -> bool {
@@ -116,5 +127,29 @@ mod tests {
     fn test_no_session_support() {
         let auth = TokenAuth::bearer("token");
         assert!(!auth.supports_session());
+    }
+
+    #[test]
+    fn test_debug_redacts_token() {
+        let auth = TokenAuth::bearer("my-secret-token");
+        let debug = format!("{auth:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("my-secret-token"));
+    }
+
+    #[tokio::test]
+    async fn test_authorization_header_is_sensitive() {
+        let auth = TokenAuth::bearer("my-secret-token");
+        let request = auth
+            .authenticate(reqwest::Client::new().get("https://example.com"))
+            .await
+            .expect("authenticate")
+            .build()
+            .expect("request");
+        let header = request
+            .headers()
+            .get("Authorization")
+            .expect("authorization header");
+        assert!(header.is_sensitive());
     }
 }

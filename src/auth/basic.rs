@@ -1,22 +1,25 @@
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use reqwest::header::{HeaderValue, AUTHORIZATION};
 use reqwest::RequestBuilder;
+use zeroize::Zeroizing;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::Authenticator;
 
 /// HTTP Basic Authentication.
 ///
-/// Encodes username:password as Base64 and sets the Authorization header.
-/// Supports session cookie reuse to avoid re-authenticating every request.
+/// Builds an `Authorization: Basic` header from username/password input, then
+/// retains only the username and encoded header value. The raw password is not
+/// stored after construction; the encoded header is credential-equivalent and
+/// stored in zeroizing memory. Supports optional session cookie reuse through
+/// reqwest's cookie store.
 #[derive(Clone)]
 pub struct BasicAuth {
     username: String,
-    #[allow(dead_code)]
-    password: String,
-    encoded: String,
+    encoded: Zeroizing<String>,
     use_session: bool,
 }
 
@@ -35,11 +38,11 @@ impl BasicAuth {
     /// Create a new BasicAuth with username and password.
     pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
         let username = username.into();
-        let password = password.into();
-        let encoded = STANDARD.encode(format!("{}:{}", username, password));
+        let password = Zeroizing::new(password.into());
+        let credentials = Zeroizing::new(format!("{username}:{}", password.as_str()));
+        let encoded = Zeroizing::new(STANDARD.encode(credentials.as_bytes()));
         Self {
             username,
-            password,
             encoded,
             use_session: true,
         }
@@ -66,12 +69,20 @@ impl BasicAuth {
     pub fn username(&self) -> &str {
         &self.username
     }
+
+    fn authorization_header(&self) -> Result<HeaderValue> {
+        let header = Zeroizing::new(format!("Basic {}", self.encoded.as_str()));
+        let mut value = HeaderValue::from_str(header.as_str())
+            .map_err(|err| Error::Config(format!("invalid basic auth header value: {err}")))?;
+        value.set_sensitive(true);
+        Ok(value)
+    }
 }
 
 #[async_trait]
 impl Authenticator for BasicAuth {
     async fn authenticate(&self, request: RequestBuilder) -> Result<RequestBuilder> {
-        Ok(request.header("Authorization", format!("Basic {}", self.encoded)))
+        Ok(request.header(AUTHORIZATION, self.authorization_header()?))
     }
 
     fn supports_session(&self) -> bool {
@@ -91,7 +102,33 @@ mod tests {
     fn test_basic_auth_encoding() {
         let auth = BasicAuth::new("admin", "password123");
         let expected = STANDARD.encode("admin:password123");
-        assert_eq!(auth.encoded, expected);
+        assert_eq!(auth.encoded.as_str(), expected);
+    }
+
+    #[test]
+    fn test_debug_redacts_secret_material() {
+        let auth = BasicAuth::new("admin", "password123");
+        let debug = format!("{auth:?}");
+        assert!(debug.contains("admin"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("password123"));
+        assert!(!debug.contains(&STANDARD.encode("admin:password123")));
+    }
+
+    #[tokio::test]
+    async fn test_authorization_header_is_sensitive() {
+        let auth = BasicAuth::new("admin", "password123");
+        let request = auth
+            .authenticate(reqwest::Client::new().get("https://example.com"))
+            .await
+            .expect("authenticate")
+            .build()
+            .expect("request");
+        let header = request
+            .headers()
+            .get(AUTHORIZATION)
+            .expect("authorization header");
+        assert!(header.is_sensitive());
     }
 
     #[test]
