@@ -69,7 +69,8 @@ impl HttpTransport {
 
     /// Perform a POST request with a JSON body.
     pub async fn post(&self, path: &str, body: Value) -> Result<ServiceNowResponse> {
-        self.request(Method::Post, path, &[], Some(body)).await
+        self.request(Method::Post, path, &[], Some(RequestBody::Json(body)))
+            .await
     }
 
     /// Perform a POST request with query parameters and a JSON body.
@@ -79,17 +80,40 @@ impl HttpTransport {
         params: &[(String, String)],
         body: Value,
     ) -> Result<ServiceNowResponse> {
-        self.request(Method::Post, path, params, Some(body)).await
+        self.request(Method::Post, path, params, Some(RequestBody::Json(body)))
+            .await
+    }
+
+    /// Perform a POST request with query parameters and a binary body.
+    pub async fn post_bytes(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<ServiceNowResponse> {
+        self.request(
+            Method::Post,
+            path,
+            params,
+            Some(RequestBody::Bytes {
+                content_type: content_type.to_string(),
+                body,
+            }),
+        )
+        .await
     }
 
     /// Perform a PUT request with a JSON body.
     pub async fn put(&self, path: &str, body: Value) -> Result<ServiceNowResponse> {
-        self.request(Method::Put, path, &[], Some(body)).await
+        self.request(Method::Put, path, &[], Some(RequestBody::Json(body)))
+            .await
     }
 
     /// Perform a PATCH request with a JSON body.
     pub async fn patch(&self, path: &str, body: Value) -> Result<ServiceNowResponse> {
-        self.request(Method::Patch, path, &[], Some(body)).await
+        self.request(Method::Patch, path, &[], Some(RequestBody::Json(body)))
+            .await
     }
 
     /// Perform a PATCH request with query parameters and a JSON body.
@@ -99,7 +123,8 @@ impl HttpTransport {
         params: &[(String, String)],
         body: Value,
     ) -> Result<ServiceNowResponse> {
-        self.request(Method::Patch, path, params, Some(body)).await
+        self.request(Method::Patch, path, params, Some(RequestBody::Json(body)))
+            .await
     }
 
     /// Perform a DELETE request.
@@ -113,7 +138,7 @@ impl HttpTransport {
         method: Method,
         path: &str,
         params: &[(String, String)],
-        body: Option<Value>,
+        body: Option<RequestBody>,
     ) -> Result<ServiceNowResponse> {
         let url = self.url(path)?;
         let mut last_error: Option<Error> = None;
@@ -140,13 +165,22 @@ impl HttpTransport {
             }
 
             // Add JSON body.
-            if let Some(ref body) = body {
-                req = req
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .json(body);
-            } else {
-                req = req.header("Accept", "application/json");
+            match &body {
+                Some(RequestBody::Json(body)) => {
+                    req = req
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "application/json")
+                        .json(body);
+                }
+                Some(RequestBody::Bytes { content_type, body }) => {
+                    req = req
+                        .header("Content-Type", content_type)
+                        .header("Accept", "application/json")
+                        .body(body.clone());
+                }
+                None => {
+                    req = req.header("Accept", "application/json");
+                }
             }
 
             // Authenticate.
@@ -233,6 +267,12 @@ enum Method {
     Delete,
 }
 
+#[derive(Debug, Clone)]
+enum RequestBody {
+    Json(Value),
+    Bytes { content_type: String, body: Vec<u8> },
+}
+
 #[async_trait::async_trait]
 impl Transport for HttpTransport {
     async fn get(&self, path: &str, params: &[(String, String)]) -> Result<ServiceNowResponse> {
@@ -250,6 +290,16 @@ impl Transport for HttpTransport {
         body: serde_json::Value,
     ) -> Result<ServiceNowResponse> {
         HttpTransport::post_with_params(self, path, params, body).await
+    }
+
+    async fn post_bytes(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<ServiceNowResponse> {
+        HttpTransport::post_bytes(self, path, params, content_type, body).await
     }
 
     async fn put(&self, path: &str, body: serde_json::Value) -> Result<ServiceNowResponse> {

@@ -74,6 +74,14 @@ pub trait Transport: Send + Sync + std::fmt::Debug {
         body: Value,
     ) -> Result<ServiceNowResponse>;
 
+    async fn post_bytes(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<ServiceNowResponse>;
+
     async fn put(&self, path: &str, body: Value) -> Result<ServiceNowResponse>;
 
     async fn patch(&self, path: &str, body: Value) -> Result<ServiceNowResponse>;

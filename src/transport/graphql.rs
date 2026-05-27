@@ -50,6 +50,16 @@ impl Transport for GraphqlTransport {
         self.http.post_with_params(path, params, body).await
     }
 
+    async fn post_bytes(
+        &self,
+        path: &str,
+        params: &[(String, String)],
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<ServiceNowResponse> {
+        self.http.post_bytes(path, params, content_type, body).await
+    }
+
     async fn put(&self, path: &str, body: Value) -> Result<ServiceNowResponse> {
         self.http.put(path, body).await
     }

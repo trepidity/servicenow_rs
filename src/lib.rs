@@ -66,13 +66,14 @@ pub mod transport;
 pub mod prelude {
     pub use crate::api::aggregate::{AggregateApi, AggregateResult};
     pub use crate::api::approval::{ApprovalAction, ApprovalBuilder};
+    pub use crate::api::attachment::AttachmentApi;
     pub use crate::api::catalog::CatalogVariable;
     pub use crate::auth::{BasicAuth, TokenAuth};
     pub use crate::client::{ClientBuilder, ServiceNowClient};
     pub use crate::error::{Error, Result};
     pub use crate::model::{
-        parse_servicenow_timestamp, DisplayValue, FieldValue, JournalEntry, QueryResult, Record,
-        TaskSla, TaskSlaStage, TaskSlaSummary,
+        parse_servicenow_timestamp, AttachmentMetadata, DisplayValue, FieldValue, JournalEntry,
+        QueryResult, Record, TaskSla, TaskSlaStage, TaskSlaSummary,
     };
     pub use crate::prefix::PrefixRegistry;
     pub use crate::query::{FetchStrategy, Operator, Order, Paginator};

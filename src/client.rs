@@ -8,11 +8,13 @@ use url::Url;
 
 use crate::api::aggregate::AggregateApi;
 use crate::api::approval::{ApprovalAction, ApprovalBuilder};
+use crate::api::attachment::AttachmentApi;
 use crate::auth::basic::BasicAuth;
 use crate::auth::token::TokenAuth;
 use crate::auth::Authenticator;
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
+use crate::model::attachment::AttachmentMetadata;
 use crate::model::record::Record;
 use crate::model::sla::{compare_planned_end_time, TaskSla};
 use crate::model::value::DisplayValue;
@@ -147,6 +149,50 @@ impl ServiceNowClient {
     /// ```
     pub fn aggregate(&self, table: &str) -> AggregateApi {
         AggregateApi::new(Arc::clone(&self.transport), table)
+    }
+
+    /// Start using the ServiceNow Attachment API.
+    pub fn attachments(&self) -> AttachmentApi {
+        AttachmentApi::new(Arc::clone(&self.transport))
+    }
+
+    /// List attachments associated with one ServiceNow record.
+    pub async fn list_attachments(
+        &self,
+        table_name: &str,
+        table_sys_id: &str,
+    ) -> Result<Vec<AttachmentMetadata>> {
+        self.attachments()
+            .list_for_record(table_name, table_sys_id)
+            .await
+    }
+
+    /// Upload bytes as an attachment to one ServiceNow record.
+    pub async fn upload_attachment_bytes(
+        &self,
+        table_name: &str,
+        table_sys_id: &str,
+        file_name: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<AttachmentMetadata> {
+        self.attachments()
+            .upload_bytes(table_name, table_sys_id, file_name, content_type, body)
+            .await
+    }
+
+    /// Upload a local file as an attachment to one ServiceNow record.
+    pub async fn upload_attachment_file(
+        &self,
+        table_name: &str,
+        table_sys_id: &str,
+        path: impl AsRef<Path>,
+        file_name: Option<&str>,
+        content_type: Option<&str>,
+    ) -> Result<AttachmentMetadata> {
+        self.attachments()
+            .upload_file(table_name, table_sys_id, path, file_name, content_type)
+            .await
     }
 
     /// Get a reference to the schema registry, if loaded.

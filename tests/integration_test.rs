@@ -3502,3 +3502,104 @@ async fn test_approve_uses_single_or_query() {
 
     assert_eq!(approval.get_str("state"), Some("Approved"));
 }
+
+#[tokio::test]
+async fn test_attachment_list_for_record() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/now/attachment"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [{
+                "sys_id": "att_sys_id",
+                "file_name": "evidence.jpeg",
+                "table_name": "change_request",
+                "table_sys_id": "chg_sys_id",
+                "content_type": "image/jpeg",
+                "size_bytes": "83338",
+                "download_link": "https://example.service-now.com/api/now/attachment/att_sys_id/file"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let attachments = client
+        .list_attachments("change_request", "chg_sys_id")
+        .await
+        .expect("attachments");
+
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].sys_id, "att_sys_id");
+    assert_eq!(attachments[0].file_name, "evidence.jpeg");
+    assert_eq!(attachments[0].size_bytes, Some(83338));
+
+    let requests = requests_for_path(&server, "/api/now/attachment").await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        request_query(&requests[0]).as_deref(),
+        Some("table_name=change_request^table_sys_id=chg_sys_id")
+    );
+    assert!(request_query_param(&requests[0], "sysparm_fields")
+        .expect("fields")
+        .contains("download_link"));
+}
+
+#[tokio::test]
+async fn test_attachment_upload_posts_binary_body() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/now/attachment/file"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "result": {
+                "sys_id": "att_sys_id",
+                "file_name": "evidence.jpeg",
+                "table_name": "change_request",
+                "table_sys_id": "chg_sys_id",
+                "content_type": "image/jpeg",
+                "size_bytes": "4"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let attachment = client
+        .upload_attachment_bytes(
+            "change_request",
+            "chg_sys_id",
+            "evidence.jpeg",
+            "image/jpeg",
+            b"jpeg".to_vec(),
+        )
+        .await
+        .expect("attachment");
+
+    assert_eq!(attachment.sys_id, "att_sys_id");
+    assert_eq!(attachment.file_name, "evidence.jpeg");
+    assert_eq!(attachment.size_bytes, Some(4));
+
+    let requests = requests_for_path(&server, "/api/now/attachment/file").await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        request_query_param(&requests[0], "table_name").as_deref(),
+        Some("change_request")
+    );
+    assert_eq!(
+        request_query_param(&requests[0], "table_sys_id").as_deref(),
+        Some("chg_sys_id")
+    );
+    assert_eq!(
+        request_query_param(&requests[0], "file_name").as_deref(),
+        Some("evidence.jpeg")
+    );
+    assert_eq!(requests[0].body, b"jpeg");
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg")
+    );
+}
